@@ -77,11 +77,11 @@ namespace NewLife.Net
         #region 扩展属性
         /// <summary>是否Tcp协议</summary>
         [XmlIgnore]
-        public Boolean IsTcp { get { return Type == NetType.Tcp; } }
+        public Boolean IsTcp => Type == NetType.Tcp;
 
         /// <summary>是否Udp协议</summary>
         [XmlIgnore]
-        public Boolean IsUdp { get { return Type == NetType.Udp; } }
+        public Boolean IsUdp => Type == NetType.Udp;
         #endregion
 
         #region 构造
@@ -90,7 +90,7 @@ namespace NewLife.Net
 
         /// <summary>实例化</summary>
         /// <param name="uri"></param>
-        public NetUri(String uri) { Parse(uri); }
+        public NetUri(String uri) => Parse(uri);
 
         /// <summary>实例化</summary>
         /// <param name="protocol"></param>
@@ -135,12 +135,12 @@ namespace NewLife.Net
 
             // 分析协议
             var protocol = "";
-            var p = uri.IndexOf(Sep);
-            if (p >= 0)
+            var array = uri.Split(Sep);
+            if (array.Length >= 2)
             {
-                protocol = uri.Substring(0, p);
+                protocol = array[0];
                 Type = ParseType(protocol);
-                uri = uri.Substring(p + Sep.Length);
+                uri = array[1];
             }
 
             _EndPoint = null;
@@ -159,13 +159,13 @@ namespace NewLife.Net
             }
 
             // 这个可能是一个Uri，去掉尾部
-            p = uri.IndexOf('/');
+            var p = uri.IndexOf('/');
             if (p < 0) p = uri.IndexOf('\\');
             if (p < 0) p = uri.IndexOf('?');
             if (p >= 0) uri = uri.Substring(0, p);
 
             // 分析端口
-            p = uri.LastIndexOf(":");
+            p = uri.LastIndexOf(':');
             if (p >= 0)
             {
                 var pt = uri.Substring(p + 1);
@@ -194,25 +194,29 @@ namespace NewLife.Net
             }
             catch { return NetType.Unknown; }
         }
+
+        /// <summary>获取该域名下所有IP地址</summary>
+        /// <returns></returns>
+        public IPAddress[] GetAddresses() => ParseAddress(Host);
         #endregion
 
         #region 辅助
         /// <summary>分析地址</summary>
         /// <param name="hostname">主机地址</param>
         /// <returns></returns>
-        public static IPAddress ParseAddress(String hostname)
+        public static IPAddress[] ParseAddress(String hostname)
         {
             if (hostname.IsNullOrEmpty()) return null;
             if (hostname == "*") return null;
 
             try
             {
-                if (IPAddress.TryParse(hostname, out var addr)) return addr;
+                if (IPAddress.TryParse(hostname, out var addr)) return new[] { addr };
 
                 var hostAddresses = Dns.GetHostAddresses(hostname);
-                if (hostAddresses == null || hostAddresses.Length < 1) return null;
+                if (hostAddresses == null || hostAddresses.Length <= 0) return null;
 
-                return hostAddresses.FirstOrDefault(d => d.AddressFamily == AddressFamily.InterNetwork || d.AddressFamily == AddressFamily.InterNetworkV6);
+                return hostAddresses.Where(d => d.AddressFamily == AddressFamily.InterNetwork || d.AddressFamily == AddressFamily.InterNetworkV6).ToArray();
             }
             catch (SocketException ex)
             {
@@ -248,10 +252,7 @@ namespace NewLife.Net
         /// <summary>重载类型转换，字符串直接转为NetUri对象</summary>
         /// <param name="value"></param>
         /// <returns></returns>
-        public static implicit operator NetUri(String value)
-        {
-            return new NetUri(value);
-        }
+        public static implicit operator NetUri(String value) => new NetUri(value);
         #endregion
     }
 }

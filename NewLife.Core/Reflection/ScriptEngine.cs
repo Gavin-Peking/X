@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if __WIN__
+using System;
 using System.CodeDom.Compiler;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -106,7 +107,7 @@ namespace NewLife.Reflection
             IsExpression = isExpression;
         }
 
-        static ConcurrentDictionary<String, ScriptEngine> _cache = new ConcurrentDictionary<String, ScriptEngine>(StringComparer.OrdinalIgnoreCase);
+        static readonly ConcurrentDictionary<String, ScriptEngine> _cache = new ConcurrentDictionary<String, ScriptEngine>(StringComparer.OrdinalIgnoreCase);
         /// <summary>为指定代码片段创建脚本引擎实例。采用缓存，避免同一脚本重复创建引擎。</summary>
         /// <param name="code">代码片段</param>
         /// <param name="isExpression">是否表达式，表达式将编译成为一个Main方法</param>
@@ -449,12 +450,12 @@ namespace NewLife.Reflection
             // 处理工作目录
             var flag = false;
             var _cur = Environment.CurrentDirectory;
-            var _my = PathHelper.BaseDirectory;
+            var _my = PathHelper.BasePath;
             if (!WorkingDirectory.IsNullOrEmpty())
             {
                 flag = true;
                 Environment.CurrentDirectory = WorkingDirectory;
-                PathHelper.BaseDirectory = WorkingDirectory;
+                PathHelper.BasePath = WorkingDirectory;
             }
 
             try
@@ -466,7 +467,7 @@ namespace NewLife.Reflection
                 if (flag)
                 {
                     Environment.CurrentDirectory = _cur;
-                    PathHelper.BaseDirectory = _my;
+                    PathHelper.BasePath = _my;
                 }
             }
         }
@@ -525,3 +526,4 @@ namespace NewLife.Reflection
         #endregion
     }
 }
+#endif

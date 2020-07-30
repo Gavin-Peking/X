@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife.Log;
@@ -57,14 +59,21 @@ namespace NewLife.Net
         /// <summary>管道</summary>
         public IPipeline Pipeline { get; set; }
 
-        /// <summary>会话统计</summary>
-        public ICounter StatSession { get; set; }
+        ///// <summary>会话统计</summary>
+        //public ICounter StatSession { get; set; }
 
-        /// <summary>发送统计</summary>
-        public ICounter StatSend { get; set; }
+        ///// <summary>发送统计</summary>
+        //public ICounter StatSend { get; set; }
 
-        /// <summary>接收统计</summary>
-        public ICounter StatReceive { get; set; }
+        ///// <summary>接收统计</summary>
+        //public ICounter StatReceive { get; set; }
+
+        /// <summary>SSL协议。默认None，服务端Default，客户端不启用</summary>
+        public SslProtocols SslProtocol { get; set; } = SslProtocols.None;
+
+        /// <summary>SSL证书。服务端使用</summary>
+        /// <remarks>var cert = new X509Certificate2("file", "pass");</remarks>
+        public X509Certificate Certificate { get; set; }
         #endregion
 
         #region 构造
@@ -87,9 +96,9 @@ namespace NewLife.Net
 
         /// <summary>已重载。释放会话集合等资源</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             if (Active) Stop(GetType().Name + (disposing ? "Dispose" : "GC"));
         }
@@ -103,10 +112,10 @@ namespace NewLife.Net
 
             if (Active || Disposed) return;
 
-            // 统计
-            if (StatSession == null) StatSession = new PerfCounter();
-            if (StatSend == null) StatSend = new PerfCounter();
-            if (StatReceive == null) StatReceive = new PerfCounter();
+            //// 统计
+            //if (StatSession == null) StatSession = new PerfCounter();
+            //if (StatSend == null) StatSend = new PerfCounter();
+            //if (StatReceive == null) StatReceive = new PerfCounter();
 
             var sock = Client;
 
@@ -122,10 +131,11 @@ namespace NewLife.Net
             sock.Bind(Local.EndPoint);
             sock.Listen(Int32.MaxValue);
 
-#if !__CORE__
-            sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontLinger, true);
-#endif
+            if (Runtime.Windows)
+            {
+                sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.DontLinger, true);
+            }
 
             Active = true;
 
@@ -256,18 +266,20 @@ namespace NewLife.Net
                 session.ID = Interlocked.Increment(ref g_ID);
                 session.WriteLog("New {0}", session.Remote.EndPoint);
 
-                StatSession?.Increment(1, 0);
+                //StatSession?.Increment(1, 0);
 
                 NewSession?.Invoke(this, new SessionEventArgs { Session = session });
 
                 // 自动开始异步接收处理
+                session.SslProtocol = SslProtocol;
+                session.Certificate = Certificate;
                 session.Start();
             }
         }
         #endregion
 
         #region 会话
-        private SessionCollection _Sessions;
+        private readonly SessionCollection _Sessions;
         /// <summary>会话集合。用地址端口作为标识，业务应用自己维持地址端口与业务主键的对应关系。</summary>
         public IDictionary<String, ISocketSession> Sessions => _Sessions;
 
@@ -285,8 +297,8 @@ namespace NewLife.Net
                 Log = Log,
                 LogSend = LogSend,
                 LogReceive = LogReceive,
-                StatSend = StatSend,
-                StatReceive = StatReceive,
+                //StatSend = StatSend,
+                //StatReceive = StatReceive,
                 ProcessAsync = ProcessAsync,
                 Pipeline = Pipeline
             };

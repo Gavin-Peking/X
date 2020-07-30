@@ -7,7 +7,11 @@ using XCode.Configuration;
 namespace XCode
 {
     /// <summary>数据实体操作接口</summary>
-    public interface IEntityOperate
+    [Obsolete("=>IEntityFactory")]
+    public interface IEntityOperate : IEntityFactory { }
+
+    /// <summary>数据实体操作接口</summary>
+    public interface IEntityFactory
     {
         #region 主要属性
         /// <summary>实体类型</summary>
@@ -15,6 +19,12 @@ namespace XCode
 
         /// <summary>实体会话</summary>
         IEntitySession Session { get; }
+
+        /// <summary>实体持久化</summary>
+        IEntityPersistence Persistence { get; set; }
+
+        /// <summary>数据行访问器，把数据行映射到实体类</summary>
+        IDataRowEntityAccessor Accessor { get; set; }
         #endregion
 
         #region 属性
@@ -216,6 +226,15 @@ namespace XCode
 
         /// <summary>默认选择的字段</summary>
         String Selects { get; set; }
+
+        /// <summary>默认选择统计语句</summary>
+        String SelectStat { get; set; }
+
+        /// <summary>实体模块集合</summary>
+        EntityModules Modules { get; }
+
+        /// <summary>是否完全插入所有字段。false表示不插入没有脏数据的字段，默认true</summary>
+        Boolean FullInsert { get; set; }
         #endregion
     }
 }

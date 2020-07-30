@@ -3,10 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
-using System.Text;
+using System.Threading.Tasks;
 using NewLife.Collections;
 using NewLife.Data;
 using NewLife.Security;
+using System.Net.Http;
 
 namespace NewLife.Http
 {
@@ -99,7 +100,7 @@ namespace NewLife.Http
             return rs;
         }
 
-        private static Byte[] NewLine = new[] { (Byte)'\r', (Byte)'\n', (Byte)'\r', (Byte)'\n' };
+        private static readonly Byte[] NewLine = new[] { (Byte)'\r', (Byte)'\n', (Byte)'\r', (Byte)'\n' };
         /// <summary>分析头部</summary>
         /// <param name="pk"></param>
         /// <returns></returns>
@@ -158,6 +159,24 @@ namespace NewLife.Http
             }
 
             return headers;
+        }
+        #endregion
+
+        #region 高级功能扩展
+        /// <summary>下载文件</summary>
+        /// <param name="client"></param>
+        /// <param name="address"></param>
+        /// <param name="fileName"></param>
+        public static async Task DownloadFileAsync(this HttpClient client, String address, String fileName)
+        {
+            var rs = await client.GetStreamAsync(address);
+            fileName.EnsureDirectory(true);
+            using var fs = new FileStream(fileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+#if NET4
+            rs.CopyTo(fs);
+#else
+            await rs.CopyToAsync(fs);
+#endif
         }
         #endregion
 
@@ -220,7 +239,7 @@ namespace NewLife.Http
              * len = 126    后续2字节表示长度，大端
              * len = 127    后续8字节表示长度
              */
-            len = len & 0x7F;
+            len &= 0x7F;
             if (len == 126)
                 len = ms.ReadBytes(2).ToUInt16(0, false);
             else if (len == 127)

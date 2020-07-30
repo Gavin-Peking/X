@@ -221,9 +221,9 @@ namespace NewLife.Threading
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             try
             {
@@ -253,7 +253,7 @@ namespace NewLife.Threading
         }
 
         private Action _callback;
-        private AutoResetEvent waitForTimer;
+        private readonly AutoResetEvent waitForTimer;
         private Int32 _state;
         private void Work()
         {

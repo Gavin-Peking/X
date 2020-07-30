@@ -137,7 +137,7 @@ namespace NewLife.Serialization
 
                 // 数据流不足时，放弃读取目标成员，并认为整体成功
                 var hs = Host.Stream;
-                if (hs.CanSeek && hs.Position < hs.Length) break;
+                if (hs.CanSeek && hs.Position >= hs.Length) break;
 
                 Object v = null;
                 v = value.GetValue(member);
@@ -211,15 +211,12 @@ namespace NewLife.Serialization
 
         static Type GetMemberType(MemberInfo member)
         {
-            switch (member.MemberType)
+            return member.MemberType switch
             {
-                case MemberTypes.Field:
-                    return (member as FieldInfo).FieldType;
-                case MemberTypes.Property:
-                    return (member as PropertyInfo).PropertyType;
-                default:
-                    throw new NotSupportedException();
-            }
+                MemberTypes.Field => (member as FieldInfo).FieldType,
+                MemberTypes.Property => (member as PropertyInfo).PropertyType,
+                _ => throw new NotSupportedException(),
+            };
         }
         #endregion
     }

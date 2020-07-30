@@ -19,7 +19,7 @@ namespace NewLife.Caching
     {
         #region 属性
         /// <summary>实体工厂</summary>
-        protected IEntityOperate Factory { get; }
+        protected IEntityFactory Factory { get; }
 
         /// <summary>主键字段</summary>
         protected Field KeyField { get; }
@@ -33,7 +33,7 @@ namespace NewLife.Caching
         /// <param name="factory"></param>
         /// <param name="keyName"></param>
         /// <param name="timeName"></param>
-        public DbCache(IEntityOperate factory = null, String keyName = null, String timeName = null)
+        public DbCache(IEntityFactory factory = null, String keyName = null, String timeName = null)
         {
             if (factory == null) factory = MyDbCache.Meta.Factory;
             if (!(factory.Default is IDbCache)) throw new XCodeException("实体类[{0}]需要实现[{1}]接口", factory.EntityType.FullName, typeof(IDbCache).FullName);
@@ -59,9 +59,9 @@ namespace NewLife.Caching
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             clearTimer.TryDispose();
             clearTimer = null;
@@ -88,7 +88,7 @@ namespace NewLife.Caching
             }
         }
 
-        private DictionaryCache<String, IDbCache> _cache = new DictionaryCache<String, IDbCache>()
+        private readonly DictionaryCache<String, IDbCache> _cache = new DictionaryCache<String, IDbCache>()
         {
             Expire = 60,
             AllowNull = false,
@@ -142,7 +142,7 @@ namespace NewLife.Caching
         public override T Get<T>(String key)
         {
             var e = Find(key);
-            if (e == null) return default(T);
+            if (e == null) return default;
 
             var value = e.Value;
             //return JsonHelper.Convert<T>(value);
@@ -263,14 +263,14 @@ namespace NewLife.Caching
         /// <param name="threads">线程</param>
         /// <param name="rand">随机读写</param>
         /// <param name="batch">批量操作</param>
-        public override void BenchOne(Int64 times, Int32 threads, Boolean rand, Int32 batch)
+        public override Int64 BenchOne(Int64 times, Int32 threads, Boolean rand, Int32 batch)
         {
             if (rand)
                 times *= 1;
             else
                 times *= 1000;
 
-            base.BenchOne(times, threads, rand, batch);
+            return base.BenchOne(times, threads, rand, batch);
         }
         #endregion
     }

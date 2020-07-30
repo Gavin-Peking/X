@@ -1,12 +1,10 @@
 ﻿using System;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime;
+using System.Runtime.InteropServices;
 using System.Text;
-#if __ANDROID__
-using Android.OS;     
-#endif
 
 namespace NewLife.Log
 {
@@ -18,27 +16,27 @@ namespace NewLife.Log
         /// <summary>调试日志</summary>
         /// <param name="format">格式化字符串</param>
         /// <param name="args">格式化参数</param>
-        public virtual void Debug(String format, params Object[] args) { Write(LogLevel.Debug, format, args); }
+        public virtual void Debug(String format, params Object[] args) => Write(LogLevel.Debug, format, args);
 
         /// <summary>信息日志</summary>
         /// <param name="format">格式化字符串</param>
         /// <param name="args">格式化参数</param>
-        public virtual void Info(String format, params Object[] args) { Write(LogLevel.Info, format, args); }
+        public virtual void Info(String format, params Object[] args) => Write(LogLevel.Info, format, args);
 
         /// <summary>警告日志</summary>
         /// <param name="format">格式化字符串</param>
         /// <param name="args">格式化参数</param>
-        public virtual void Warn(String format, params Object[] args) { Write(LogLevel.Warn, format, args); }
+        public virtual void Warn(String format, params Object[] args) => Write(LogLevel.Warn, format, args);
 
         /// <summary>错误日志</summary>
         /// <param name="format">格式化字符串</param>
         /// <param name="args">格式化参数</param>
-        public virtual void Error(String format, params Object[] args) { Write(LogLevel.Error, format, args); }
+        public virtual void Error(String format, params Object[] args) => Write(LogLevel.Error, format, args);
 
         /// <summary>严重错误日志</summary>
         /// <param name="format">格式化字符串</param>
         /// <param name="args">格式化参数</param>
-        public virtual void Fatal(String format, params Object[] args) { Write(LogLevel.Fatal, format, args); }
+        public virtual void Fatal(String format, params Object[] args) => Write(LogLevel.Fatal, format, args);
         #endregion
 
         #region 核心方法
@@ -101,7 +99,7 @@ namespace NewLife.Log
 
         private LogLevel? _Level;
         /// <summary>日志等级，只输出大于等于该级别的日志，默认Info，打开NewLife.Debug时默认为最低的Debug</summary>
-        public LogLevel Level
+        public virtual LogLevel Level
         {
             get
             {
@@ -119,7 +117,7 @@ namespace NewLife.Log
 
         class NullLogger : Logger
         {
-            public override Boolean Enable { get { return false; } set { } }
+            public override Boolean Enable { get => false; set { } }
 
             protected override void OnWrite(LogLevel level, String format, params Object[] args) { }
         }
@@ -156,6 +154,9 @@ namespace NewLife.Log
                 var tar = asm.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>();
                 if (tar != null) ver = tar.FrameworkDisplayName ?? tar.FrameworkName;
             }
+#if __CORE__
+            ver = RuntimeInformation.FrameworkDescription;
+#endif
             if (String.IsNullOrEmpty(name))
             {
                 try
@@ -170,15 +171,13 @@ namespace NewLife.Log
             sb.AppendFormat("#AppDomain: {0}\r\n", AppDomain.CurrentDomain.FriendlyName);
 
             var fileName = String.Empty;
-#if !__MOBILE__
             // MonoAndroid无法识别MainModule，致命异常
             try
             {
                 fileName = process.MainModule.FileName;
             }
             catch { }
-#endif
-            if (fileName.IsNullOrEmpty() || !fileName.EndsWithIgnoreCase("dotnet", "dotnet.exe"))
+            if (fileName.IsNullOrEmpty() || fileName.EndsWithIgnoreCase("dotnet", "dotnet.exe"))
             {
                 try
                 {
@@ -193,27 +192,25 @@ namespace NewLife.Log
             sb.AppendFormat("#BaseDirectory: {0}\r\n", baseDir);
 
             // 当前目录。如果由别的进程启动，默认的当前目录就是父级进程的当前目录
-            var curDir = System.Environment.CurrentDirectory;
+            var curDir = Environment.CurrentDirectory;
             //if (!curDir.EqualIC(baseDir) && !(curDir + "\\").EqualIC(baseDir))
             if (!baseDir.EqualIgnoreCase(curDir, curDir + "\\", curDir + "/"))
                 sb.AppendFormat("#CurrentDirectory: {0}\r\n", curDir);
 
+            var basePath = PathHelper.BasePath;
+            if (basePath != baseDir)
+                sb.AppendFormat("#BasePath: {0}\r\n", basePath);
+
+            // 临时目录
+            sb.AppendFormat("#TempPath: {0}\r\n", Path.GetTempPath());
+
             // 命令行不为空，也不是文件名时，才输出
             // 当使用cmd启动程序时，这里就是用户输入的整个命令行，所以可能包含空格和各种符号
-            var line = System.Environment.CommandLine;
+            var line = Environment.CommandLine;
             if (!line.IsNullOrEmpty())
                 sb.AppendFormat("#CommandLine: {0}\r\n", line);
 
             var apptype = "";
-#if __MOBILE__
-#if __ANDROID__
-            apptype = "Android";
-#elif __IOS__
-            apptype = "iOS";
-#else
-            apptype = "Mobile";
-#endif
-#else
             if (Runtime.IsWeb)
                 apptype = "Web";
             else if (!Environment.UserInteractive)
@@ -222,44 +219,38 @@ namespace NewLife.Log
                 apptype = "Console";
             else
                 apptype = "WinForm";
-#endif
 
             sb.AppendFormat("#ApplicationType: {0}\r\n", apptype);
             sb.AppendFormat("#CLR: {0}, {1}\r\n", Environment.Version, ver);
 
-#if __MOBILE__
-#if __ANDROID__
-            sb.AppendFormat("#OS: {0}, {1}/{2}\r\n", Build.Fingerprint, Build.Host, Build.Model);
-#elif __IOS__
-            sb.AppendFormat("#OS: {0}, {1}/{2}\r\n", "iOS", "", "");
-#else
-            sb.AppendFormat("#OS: {0}, {1}/{2}\r\n", "Mobile", "", "");
-#endif
-#else
-            var os = Environment.OSVersion + "";
-            if (Runtime.Linux)
+            var os = "";
+            // 获取丰富的机器信息，需要提注册 MachineInfo.RegisterAsync
+            var mi = MachineInfo.Current;
+            if (mi != null)
+            {
+                os = mi.OSName + " " + mi.OSVersion;
+            }
+            else
             {
                 // 特别识别Linux发行版
-                var fr = "/etc/redhat-release";
-                var dr = "/etc/debian-release";
-                if (File.Exists(fr))
-                    os = File.ReadAllText(fr).Trim();
-                else if (File.Exists(dr))
-                    os = File.ReadAllText(dr).Trim();
-                else
-                {
-                    var sr = "/etc/os-release";
-                    if (File.Exists(sr)) os = File.ReadAllText(sr).SplitAsDictionary("=", "\n", true)["PRETTY_NAME"].Trim();
-                }
+                os = Environment.OSVersion + "";
+                if (Runtime.Linux) os = MachineInfo.GetLinuxName();
             }
 
             sb.AppendFormat("#OS: {0}, {1}/{2}\r\n", os, Environment.MachineName, Environment.UserName);
-#endif
-            sb.AppendFormat("#CPU: {0}\r\n", System.Environment.ProcessorCount);
+            sb.AppendFormat("#CPU: {0}\r\n", Environment.ProcessorCount);
+            if (mi != null)
+            {
+                sb.AppendFormat("#Memory: {0:n0}M/{1:n0}M\r\n", mi.AvailableMemory / 1024 / 1024, mi.Memory / 1024 / 1024);
+                sb.AppendFormat("#Processor: {0}\r\n", mi.Processor);
+                if (!mi.Product.IsNullOrEmpty()) sb.AppendFormat("#Product: {0}\r\n", mi.Product);
+                if (mi.Temperature > 0) sb.AppendFormat("#Temperature: {0}\r\n", mi.Temperature);
+            }
+            sb.AppendFormat("#GC: IsServerGC={0}, LatencyMode={1}\r\n", GCSettings.IsServerGC, GCSettings.LatencyMode);
 
             sb.AppendFormat("#Date: {0:yyyy-MM-dd}\r\n", DateTime.Now);
-            sb.AppendFormat("#字段: 时间 线程ID 线程池Y网页W普通N 线程名 消息内容\r\n");
-            sb.AppendFormat("#Fields: Time ThreadID IsPoolThread ThreadName Message\r\n");
+            sb.AppendFormat("#字段: 时间 线程ID 线程池Y/网页W/普通N/定时T 线程名/任务ID 消息内容\r\n");
+            sb.AppendFormat("#Fields: Time ThreadID Kind Name Message\r\n");
 
             return sb.ToString();
         }

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using NewLife.Log;
 
+#nullable enable
 namespace NewLife.Threading
 {
     /// <summary>定时器调度器</summary>
@@ -12,7 +13,7 @@ namespace NewLife.Threading
         #region 静态
         private TimerScheduler(String name) => Name = name;
 
-        private static Dictionary<String, TimerScheduler> _cache = new Dictionary<String, TimerScheduler>();
+        private static readonly Dictionary<String, TimerScheduler> _cache = new Dictionary<String, TimerScheduler>();
 
         /// <summary>创建指定名称的调度器</summary>
         /// <param name="name"></param>
@@ -27,8 +28,6 @@ namespace NewLife.Threading
                 ts = new TimerScheduler(name);
                 _cache[name] = ts;
 
-                WriteLog("启动定时调度器：{0}", name);
-
                 return ts;
             }
         }
@@ -37,9 +36,9 @@ namespace NewLife.Threading
         public static TimerScheduler Default { get; } = Create("Default");
 
         [ThreadStatic]
-        private static TimerScheduler _Current;
+        private static TimerScheduler? _Current;
         /// <summary>当前调度器</summary>
-        public static TimerScheduler Current { get { return _Current; } private set { _Current = value; } }
+        public static TimerScheduler? Current { get => _Current; private set => _Current = value; }
         #endregion
 
         #region 属性
@@ -52,7 +51,8 @@ namespace NewLife.Threading
         /// <summary>最大耗时。超过时报警告日志，默认500ms</summary>
         public Int32 MaxCost { get; set; } = 500;
 
-        private Thread thread;
+        private Thread? thread;
+        private Int32 _tid;
 
         private TimerX[] Timers = new TimerX[0];
         #endregion
@@ -61,6 +61,7 @@ namespace NewLife.Threading
         /// <param name="timer"></param>
         public void Add(TimerX timer)
         {
+            timer.Id = Interlocked.Increment(ref _tid);
             WriteLog("Timer.Add {0}ms {1}", timer.Period, timer);
 
             lock (this)
@@ -82,6 +83,8 @@ namespace NewLife.Threading
                         IsBackground = true
                     };
                     thread.Start();
+
+                    WriteLog("启动定时调度器：{0}", Name);
                 }
 
                 Wake();
@@ -92,14 +95,17 @@ namespace NewLife.Threading
 
         /// <summary>从队列删除定时器</summary>
         /// <param name="timer"></param>
-        public void Remove(TimerX timer)
+        /// <param name="reason"></param>
+        public void Remove(TimerX timer, String reason)
         {
-            if (timer == null) return;
+            if (timer == null || timer.Id == 0) return;
 
-            WriteLog("Timer.Remove {0}", timer);
+            WriteLog("Timer.Remove {0} reason:{1}", timer, reason);
 
             lock (this)
             {
+                timer.Id = 0;
+
                 var list = new List<TimerX>(Timers);
                 if (list.Contains(timer))
                 {
@@ -111,7 +117,7 @@ namespace NewLife.Threading
             }
         }
 
-        private AutoResetEvent waitForTimer;
+        private AutoResetEvent? waitForTimer;
         private Int32 period = 10;
 
         /// <summary>唤醒处理</summary>
@@ -136,13 +142,15 @@ namespace NewLife.Threading
                 var arr = Timers;
 
                 // 如果没有任务，则销毁线程
-                if (arr.Length == 0 && period == 60000)
+                if (arr.Length == 0 && period == 60_000)
                 {
                     WriteLog("没有可用任务，销毁线程");
 
                     var th = thread;
                     thread = null;
-                    th.Abort();
+#if !__CORE__
+                    th?.Abort();
+#endif
 
                     break;
                 }
@@ -152,7 +160,7 @@ namespace NewLife.Threading
                     var now = DateTime.Now;
 
                     // 设置一个较大的间隔，内部会根据处理情况调整该值为最合理值
-                    period = 60000;
+                    period = 60_000;
                     foreach (var timer in arr)
                     {
                         if (!timer.Calling && CheckTime(timer, now))
@@ -184,7 +192,7 @@ namespace NewLife.Threading
                 catch { }
 
                 if (waitForTimer == null) waitForTimer = new AutoResetEvent(false);
-                waitForTimer.WaitOne(period, false);
+                if (period > 0) waitForTimer.WaitOne(period, true);
             }
         }
 
@@ -225,6 +233,8 @@ namespace NewLife.Threading
         private void Execute(Object state)
         {
             var timer = state as TimerX;
+            if (timer == null) return;
+
             TimerX.Current = timer;
 
             // 控制日志显示
@@ -240,6 +250,7 @@ namespace NewLife.Threading
                 var tc = timer.Callback;
                 if (tc == null || !tc.IsAlive)
                 {
+                    Remove(timer, "委托已不存在（GC回收委托所在对象）");
                     timer.Dispose();
                     return;
                 }
@@ -281,21 +292,15 @@ namespace NewLife.Threading
 
         private void OnFinish(TimerX timer)
         {
-            // 再次读取周期，因为任何函数可能会修改
-            var p = timer.Period;
-
             // 如果内部设置了下一次时间，则不再递加周期
-            if (!timer.hasSetNext)
-            {
-                if (timer.Absolutely)
-                    timer.NextTime = timer.NextTime.AddMilliseconds(p);
-                else
-                    timer.NextTime = DateTime.Now.AddMilliseconds(p);
-            }
+            var p = timer.SetAndGetNextTime();
 
             // 清理一次性定时器
             if (p <= 0)
+            {
+                Remove(timer, "Period<=0");
                 timer.Dispose();
+            }
             else if (p < period)
                 period = p;
         }
@@ -305,13 +310,11 @@ namespace NewLife.Threading
         public override String ToString() => Name;
 
         #region 设置
-        /// <summary>是否开启调试，输出更多信息</summary>
-        public static Boolean Debug { get; set; }
+        /// <summary>日志</summary>
+        public ILog Log { get; set; } = Logger.Null;
 
-        static void WriteLog(String format, params Object[] args)
-        {
-            if (Debug) XTrace.WriteLine(format, args);
-        }
+        private void WriteLog(String format, params Object[] args) => Log?.Info(Name + format, args);
         #endregion
     }
 }
+#nullable restore

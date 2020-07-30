@@ -1,15 +1,13 @@
 ﻿using System;
 using System.ComponentModel;
-using NewLife.Xml;
+using NewLife.Configuration;
 
 namespace NewLife.Net
 {
     /// <summary>网络设置</summary>
     [DisplayName("网络设置")]
-#if !__MOBILE__
-    [XmlConfigFile(@"Config\Socket.config", 15000)]
-#endif
-    public class Setting : XmlConfig<Setting>
+    [Config("Socket")]
+    public class Setting : Config<Setting>
     {
         #region 属性
         /// <summary>网络调试</summary>

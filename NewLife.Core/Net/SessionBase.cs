@@ -9,6 +9,9 @@ using NewLife.Data;
 using NewLife.Log;
 using NewLife.Model;
 using NewLife.Threading;
+#if !NET4
+using TaskEx = System.Threading.Tasks.Task;
+#endif
 
 namespace NewLife.Net
 {
@@ -16,6 +19,9 @@ namespace NewLife.Net
     public abstract class SessionBase : DisposeBase, ISocketClient, ITransport
     {
         #region 属性
+        /// <summary>标识</summary>
+        public Int32 ID { get; internal set; }
+
         /// <summary>名称</summary>
         public String Name { get; set; }
 
@@ -40,11 +46,11 @@ namespace NewLife.Net
         /// <summary>是否抛出异常，默认false不抛出。Send/Receive时可能发生异常，该设置决定是直接抛出异常还是通过<see cref="Error"/>事件</summary>
         public Boolean ThrowException { get; set; }
 
-        /// <summary>发送数据包统计信息</summary>
-        public ICounter StatSend { get; set; }
+        ///// <summary>发送数据包统计信息</summary>
+        //public ICounter StatSend { get; set; }
 
-        /// <summary>接收数据包统计信息</summary>
-        public ICounter StatReceive { get; set; }
+        ///// <summary>接收数据包统计信息</summary>
+        //public ICounter StatReceive { get; set; }
 
         /// <summary>通信开始时间</summary>
         public DateTime StartTime { get; private set; } = TimerX.Now;
@@ -64,6 +70,7 @@ namespace NewLife.Net
 
         /// <summary>缓冲区大小。默认8k</summary>
         public Int32 BufferSize { get; set; }
+
         #endregion
 
         #region 构造
@@ -78,9 +85,9 @@ namespace NewLife.Net
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             var reason = GetType().Name + (disposing ? "Dispose" : "GC");
             //_SendQueue?.Release(reason);
@@ -122,7 +129,12 @@ namespace NewLife.Net
                     var rs = OnOpen();
                     if (!rs) return false;
 
-                    if (Timeout > 0) Client.ReceiveTimeout = Timeout;
+                    var timeout = Timeout;
+                    if (timeout > 0)
+                    {
+                        Client.SendTimeout = timeout;
+                        Client.ReceiveTimeout = timeout;
+                    }
 
                     if (!Local.IsUdp)
                     {
@@ -133,9 +145,9 @@ namespace NewLife.Net
                 }
                 Active = true;
 
-                // 统计
-                if (StatSend == null) StatSend = new PerfCounter();
-                if (StatReceive == null) StatReceive = new PerfCounter();
+                //// 统计
+                //if (StatSend == null) StatSend = new PerfCounter();
+                //if (StatReceive == null) StatReceive = new PerfCounter();
 
                 ReceiveAsync();
 
@@ -273,7 +285,7 @@ namespace NewLife.Net
                 var buf = new Byte[BufferSize];
                 var se = new SocketAsyncEventArgs();
                 se.SetBuffer(buf, 0, buf.Length);
-                se.Completed += (s, e) => ProcessEvent(e);
+                se.Completed += (s, e) => ProcessEvent(e, -1);
                 se.UserToken = count;
 
                 if (Log != null && Log.Level <= LogLevel.Debug) WriteLog("创建RecvSA {0}", count);
@@ -333,10 +345,10 @@ namespace NewLife.Net
             // 如果当前就是异步线程，直接处理，否则需要开任务处理，不要占用主线程
             if (!rs)
             {
-                if (io)
-                    ProcessEvent(se);
-                else
-                    ThreadPoolX.QueueUserWorkItem(ProcessEvent, se);
+                //if (io)
+                //    ProcessEvent(se, -1);
+                //else
+                ThreadPoolX.QueueUserWorkItem(s => ProcessEvent(s, -1), se);
             }
 
             return true;
@@ -346,54 +358,62 @@ namespace NewLife.Net
 
         /// <summary>同步或异步收到数据</summary>
         /// <param name="se"></param>
-        void ProcessEvent(SocketAsyncEventArgs se)
+        /// <param name="bytes"></param>
+        internal protected void ProcessEvent(SocketAsyncEventArgs se, Int32 bytes)
         {
-            if (!Active)
+            try
             {
-                ReleaseRecv(se, "!Active " + se.SocketError);
-                return;
-            }
-
-            // 判断成功失败
-            if (se.SocketError != SocketError.Success)
-            {
-                // 未被关闭Socket时，可以继续使用
-                if (OnReceiveError(se))
+                if (!Active)
                 {
-                    var ex = se.GetException();
-                    if (ex != null) OnError("ReceiveAsync", ex);
-
-                    ReleaseRecv(se, "SocketError " + se.SocketError);
-
+                    ReleaseRecv(se, "!Active " + se.SocketError);
                     return;
                 }
-            }
-            else
-            {
-                var ep = se.RemoteEndPoint as IPEndPoint ?? Remote.EndPoint;
 
-                var pk = new Packet(se.Buffer, se.Offset, se.BytesTransferred);
-                if (ProcessAsync)
+                // 判断成功失败
+                if (se.SocketError != SocketError.Success)
                 {
-                    // 拷贝走数据，参数要重复利用
-                    pk = pk.Clone();
-                    // 根据不信任用户原则，这里另外开线程执行用户逻辑
-                    // 有些用户在处理数据时，又发送数据并等待响应
-                    ThreadPoolX.QueueUserWorkItem(() => ProcessReceive(pk, ep));
+                    // 未被关闭Socket时，可以继续使用
+                    if (OnReceiveError(se))
+                    {
+                        var ex = se.GetException();
+                        if (ex != null) OnError("ReceiveAsync", ex);
+
+                        ReleaseRecv(se, "SocketError " + se.SocketError);
+
+                        return;
+                    }
                 }
                 else
                 {
-                    // 同步执行，直接使用数据，不需要拷贝
-                    // 直接在IO线程调用业务逻辑
-                    ProcessReceive(pk, ep);
+                    var ep = se.RemoteEndPoint as IPEndPoint ?? Remote.EndPoint;
+                    if (bytes < 0) bytes = se.BytesTransferred;
+                    var pk = new Packet(se.Buffer, se.Offset, bytes);
+                    if (ProcessAsync)
+                    {
+                        // 拷贝走数据，参数要重复利用
+                        pk = pk.Clone();
+                        // 根据不信任用户原则，这里另外开线程执行用户逻辑
+                        // 有些用户在处理数据时，又发送数据并等待响应
+                        ThreadPoolX.QueueUserWorkItem(() => ProcessReceive(pk, ep));
+                    }
+                    else
+                    {
+                        // 同步执行，直接使用数据，不需要拷贝
+                        // 直接在IO线程调用业务逻辑
+                        ProcessReceive(pk, ep);
+                    }
                 }
-            }
 
-            // 开始新的监听
-            if (Active && !Disposed)
-                ReceiveAsync(se, true);
-            else
-                ReleaseRecv(se, "!Active || Disposed");
+                // 开始新的监听
+                if (Active && !Disposed)
+                    ReceiveAsync(se, true);
+                else
+                    ReleaseRecv(se, "!Active || Disposed");
+            }
+            catch (Exception ex)
+            {
+                XTrace.WriteException(ex);
+            }
         }
 
         /// <summary>接收预处理，粘包拆包</summary>
@@ -413,7 +433,7 @@ namespace NewLife.Net
 
                 if (Local.IsTcp) remote = Remote.EndPoint;
 
-                var e = new ReceivedEventArgs(pk) { Remote = remote };
+                var e = new ReceivedEventArgs { Packet = pk, Remote = remote };
 
                 // 不管Tcp/Udp，都在这使用管道
                 var pp = Pipeline;
@@ -496,8 +516,6 @@ namespace NewLife.Net
         /// <returns></returns>
         public virtual Boolean SendMessage(Object message)
         {
-            //Pipeline.FireWrite(this, message);
-
             var ctx = CreateContext(this);
             message = Pipeline.Write(ctx, message);
 
@@ -509,19 +527,13 @@ namespace NewLife.Net
         /// <returns></returns>
         public virtual Task<Object> SendMessageAsync(Object message)
         {
-            //Pipeline.FireWriteAndWait(this, message);
-
             var ctx = CreateContext(this);
             var source = new TaskCompletionSource<Object>();
             ctx["TaskSource"] = source;
 
             message = Pipeline.Write(ctx, message);
 
-#if NET4
             if (!ctx.FireWrite(message)) return TaskEx.FromResult((Object)null);
-#else
-            if (!ctx.FireWrite(message)) return Task.FromResult((Object)null);
-#endif
 
             return source.Task;
         }
@@ -529,9 +541,9 @@ namespace NewLife.Net
         /// <summary>处理数据帧</summary>
         /// <param name="data">数据帧</param>
         void ISocketRemote.Process(IData data) => OnReceive(data as ReceivedEventArgs);
-#endregion
+        #endregion
 
-#region 异常处理
+        #region 异常处理
         /// <summary>错误发生/断开连接时</summary>
         public event EventHandler<ExceptionEventArgs> Error;
 
@@ -546,9 +558,9 @@ namespace NewLife.Net
             if (Log != null) Log.Error("{0}{1}Error {2} {3}", LogPrefix, action, this, ex?.Message);
             Error?.Invoke(this, new ExceptionEventArgs { Action = action, Exception = ex });
         }
-#endregion
+        #endregion
 
-#region 扩展接口
+        #region 扩展接口
         /// <summary>数据项</summary>
         public IDictionary<String, Object> Items { get; } = new NullableDictionary<String, Object>();
 
@@ -556,9 +568,9 @@ namespace NewLife.Net
         /// <param name="key"></param>
         /// <returns></returns>
         public Object this[String key] { get => Items[key]; set => Items[key] = value; }
-#endregion
+        #endregion
 
-#region 日志
+        #region 日志
         /// <summary>日志前缀</summary>
         public virtual String LogPrefix { get; set; }
 
@@ -578,6 +590,6 @@ namespace NewLife.Net
         {
             if (Log != null && Log.Enable) Log.Info(LogPrefix + format, args);
         }
-#endregion
+        #endregion
     }
 }

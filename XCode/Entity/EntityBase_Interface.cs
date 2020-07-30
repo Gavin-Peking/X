@@ -5,20 +5,30 @@ using XCode.Configuration;
 
 namespace XCode
 {
-    public partial class EntityBase : ICustomTypeDescriptor, IEditableObject
+    public partial class EntityBase : ICustomTypeDescriptor/*, IEditableObject*/, INotifyPropertyChanging, INotifyPropertyChanged
     {
         #region INotifyPropertyChanged接口
+        /// <summary>属性将要改变时</summary>
+        public event PropertyChangingEventHandler PropertyChanging;
+
+        /// <summary>属性改变事件</summary>
+        public event PropertyChangedEventHandler PropertyChanged;
+
         /// <summary>属性改变。重载时记得调用基类的该方法，以设置脏数据属性，否则数据将无法Update到数据库。</summary>
         /// <param name="fieldName">字段名</param>
         /// <param name="newValue">新属性值</param>
         /// <returns>是否允许改变</returns>
         protected virtual Boolean OnPropertyChanging(String fieldName, Object newValue)
         {
-            // 如果数据没有改变，不应该影响脏数据
-            //if (IsFromDatabase && CheckEqual(this[fieldName], newValue)) return false;
-            if (CheckEqual(this[fieldName], newValue)) return false;
+            PropertyChanging?.Invoke(this, new PropertyChangingEventArgs(fieldName));
 
-            Dirtys[fieldName] = true;
+            // 如果数据没有改变，不应该影响脏数据
+            if (IsFromDatabase && CheckEqual(this[fieldName], newValue)) return false;
+            //if (CheckEqual(this[fieldName], newValue)) return false;
+
+            //Dirtys[fieldName] = true;
+            //OnPropertyChanged(fieldName);
+
             return true;
         }
 
@@ -26,23 +36,15 @@ namespace XCode
         /// <param name="v1"></param>
         /// <param name="v2"></param>
         /// <returns></returns>
-        private Boolean CheckEqual(Object v1, Object v2)
+        internal static Boolean CheckEqual(Object v1, Object v2)
         {
             if (v1 == null || v2 == null) return Equals(v1, v2);
 
             switch (Type.GetTypeCode(v1.GetType()))
             {
                 case TypeCode.DateTime:
-                    {
-                        var d1 = (DateTime)v1;
-                        var d2 = (DateTime)v2;
-
-                        // 时间存储包括年月日时分秒，后面还有微秒，而我们数据库存储默认不需要微秒，所以时间的相等判断需要做特殊处理
-                        return d1.Date == d2.Date &&
-                            d1.Hour == d2.Hour &&
-                            d1.Minute == d2.Minute &&
-                            d1.Second == d2.Second;
-                    }
+                    // 时间存储包括年月日时分秒，后面还有微秒，而我们数据库存储默认不需要微秒，所以时间的相等判断需要做特殊处理
+                    return v1.ToDateTime().Trim() == v2.ToDateTime().Trim();
                 case TypeCode.Int16:
                 case TypeCode.Int32:
                 case TypeCode.Int64:
@@ -52,6 +54,11 @@ namespace XCode
                     return Convert.ToInt64(v1) == Convert.ToInt64(v2);
                 case TypeCode.String:
                     return v1 + "" == v2 + "";
+                case TypeCode.Single:
+                case TypeCode.Double:
+                    return Math.Abs(v1.ToDouble() - v2.ToDouble()) < 0.000_001;
+                case TypeCode.Decimal:
+                    return Math.Abs((Decimal)v1 - Convert.ToDecimal(v2)) < 0.000_000_000_001m;
                 default:
                     break;
             }
@@ -61,7 +68,12 @@ namespace XCode
 
         /// <summary>属性改变。重载时记得调用基类的该方法，以设置脏数据属性，否则数据将无法Update到数据库。</summary>
         /// <param name="fieldName">字段名</param>
-        protected virtual void OnPropertyChanged(String fieldName) { }
+        protected virtual void OnPropertyChanged(String fieldName)
+        {
+            Dirtys[fieldName] = true;
+
+            PropertyChanged?.Invoke(fieldName, new PropertyChangedEventArgs(fieldName));
+        }
         #endregion
 
         #region ICustomTypeDescriptor 成员
@@ -98,46 +110,21 @@ namespace XCode
             return atts;
         }
 
-        String ICustomTypeDescriptor.GetClassName()
-        {
-            //return TypeDescriptor.GetClassName(this, true);
-            return GetType().FullName;
-        }
+        String ICustomTypeDescriptor.GetClassName() => GetType().FullName;
 
-        String ICustomTypeDescriptor.GetComponentName()
-        {
-            return TypeDescriptor.GetComponentName(this, true);
-        }
+        String ICustomTypeDescriptor.GetComponentName() => TypeDescriptor.GetComponentName(this, true);
 
-        TypeConverter ICustomTypeDescriptor.GetConverter()
-        {
-            return TypeDescriptor.GetConverter(this, true);
-        }
+        TypeConverter ICustomTypeDescriptor.GetConverter() => TypeDescriptor.GetConverter(this, true);
 
-        EventDescriptor ICustomTypeDescriptor.GetDefaultEvent()
-        {
-            return TypeDescriptor.GetDefaultEvent(this, true);
-        }
+        EventDescriptor ICustomTypeDescriptor.GetDefaultEvent() => TypeDescriptor.GetDefaultEvent(this, true);
 
-        PropertyDescriptor ICustomTypeDescriptor.GetDefaultProperty()
-        {
-            return TypeDescriptor.GetDefaultProperty(this, true);
-        }
+        PropertyDescriptor ICustomTypeDescriptor.GetDefaultProperty() => TypeDescriptor.GetDefaultProperty(this, true);
 
-        Object ICustomTypeDescriptor.GetEditor(Type editorBaseType)
-        {
-            return TypeDescriptor.GetEditor(this, editorBaseType, true);
-        }
+        Object ICustomTypeDescriptor.GetEditor(Type editorBaseType) => TypeDescriptor.GetEditor(this, editorBaseType, true);
 
-        EventDescriptorCollection ICustomTypeDescriptor.GetEvents(Attribute[] attributes)
-        {
-            return TypeDescriptor.GetEvents(this, attributes, true);
-        }
+        EventDescriptorCollection ICustomTypeDescriptor.GetEvents(Attribute[] attributes) => TypeDescriptor.GetEvents(this, attributes, true);
 
-        EventDescriptorCollection ICustomTypeDescriptor.GetEvents()
-        {
-            return TypeDescriptor.GetEvents(this, true);
-        }
+        EventDescriptorCollection ICustomTypeDescriptor.GetEvents() => TypeDescriptor.GetEvents(this, true);
 
         PropertyDescriptorCollection ICustomTypeDescriptor.GetProperties(Attribute[] attributes)
         {
@@ -149,16 +136,13 @@ namespace XCode
             return Fix(GetType(), TypeDescriptor.GetProperties(this, true));
         }
 
-        Object ICustomTypeDescriptor.GetPropertyOwner(PropertyDescriptor pd)
-        {
-            return this;
-        }
+        Object ICustomTypeDescriptor.GetPropertyOwner(PropertyDescriptor pd) => this;
 
         internal static PropertyDescriptorCollection Fix(Type type, PropertyDescriptorCollection pdc)
         {
             if (pdc == null || pdc.Count < 1) return pdc;
 
-            var factory = EntityFactory.CreateOperate(type);
+            var factory = type.AsFactory();
 
             // 准备字段集合
             var dic = new Dictionary<String, FieldItem>(StringComparer.OrdinalIgnoreCase);
@@ -203,28 +187,28 @@ namespace XCode
         #endregion
 
         #region IEditableObject 成员
-        [NonSerialized]
-        private EntityBase _bak;
+        //[NonSerialized]
+        //private EntityBase _bak;
 
-        void IEditableObject.BeginEdit()
-        {
-            _bak = Clone() as EntityBase;
-        }
+        //void IEditableObject.BeginEdit()
+        //{
+        //    _bak = Clone() as EntityBase;
+        //}
 
-        void IEditableObject.CancelEdit()
-        {
-            CopyFrom(_bak, false);
+        //void IEditableObject.CancelEdit()
+        //{
+        //    CopyFrom(_bak, false);
 
-            _bak = null;
-        }
+        //    _bak = null;
+        //}
 
-        void IEditableObject.EndEdit()
-        {
-            //Update();
-            Save();
+        //void IEditableObject.EndEdit()
+        //{
+        //    //Update();
+        //    Save();
 
-            _bak = null;
-        }
+        //    _bak = null;
+        //}
         #endregion
     }
 }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
@@ -43,11 +44,11 @@ namespace NewLife.Net
         /// <remarks>异步处理有可能造成数据包乱序，特别是Tcp。true利于提升网络吞吐量。false避免拷贝，提升处理速度</remarks>
         Boolean ProcessAsync { get; set; }
 
-        /// <summary>发送统计</summary>
-        ICounter StatSend { get; set; }
+        ///// <summary>发送统计</summary>
+        //ICounter StatSend { get; set; }
 
-        /// <summary>接收统计</summary>
-        ICounter StatReceive { get; set; }
+        ///// <summary>接收统计</summary>
+        //ICounter StatReceive { get; set; }
 
         /// <summary>日志提供者</summary>
         ILog Log { get; set; }
@@ -73,9 +74,12 @@ namespace NewLife.Net
     }
 
     /// <summary>远程通信Socket，仅具有收发功能</summary>
-    public interface ISocketRemote : ISocket, IExtend
+    public interface ISocketRemote : ISocket, IExtend3
     {
         #region 属性
+        /// <summary>标识</summary>
+        Int32 ID { get; }
+
         /// <summary>远程地址</summary>
         NetUri Remote { get; set; }
 
@@ -87,6 +91,9 @@ namespace NewLife.Net
 
         /// <summary>缓冲区大小</summary>
         Int32 BufferSize { get; set; }
+
+        ///// <summary>数据项</summary>
+        //IDictionary<String, Object> Items { get; }
         #endregion
 
         #region 发送
@@ -129,23 +136,23 @@ namespace NewLife.Net
     public static class SocketRemoteHelper
     {
         #region 统计
-        /// <summary>获取统计信息</summary>
-        /// <param name="socket"></param>
-        /// <returns></returns>
-        public static String GetStat(this ISocketRemote socket)
-        {
-            if (socket == null) return null;
+        ///// <summary>获取统计信息</summary>
+        ///// <param name="socket"></param>
+        ///// <returns></returns>
+        //public static String GetStat(this ISocketRemote socket)
+        //{
+        //    if (socket == null) return null;
 
-            var st1 = socket.StatSend;
-            var st2 = socket.StatReceive;
-            if (st1 == null && st2 == null) return null;
+        //    var st1 = socket.StatSend;
+        //    var st2 = socket.StatReceive;
+        //    if (st1 == null && st2 == null) return null;
 
-            var sb = Pool.StringBuilder.Get();
-            if (st1 != null && st1.Value > 0) sb.AppendFormat("发送：{0} ", st1);
-            if (st2 != null && st2.Value > 0) sb.AppendFormat("接收：{0} ", st2);
+        //    var sb = Pool.StringBuilder.Get();
+        //    if (st1 != null && st1.Value > 0) sb.AppendFormat("发送：{0} ", st1);
+        //    if (st2 != null && st2.Value > 0) sb.AppendFormat("接收：{0} ", st2);
 
-            return sb.Put(true);
-        }
+        //    return sb.Put(true);
+        //}
         #endregion
 
         #region 发送
@@ -243,22 +250,14 @@ namespace NewLife.Net
         /// <summary>添加处理器</summary>
         /// <typeparam name="THandler"></typeparam>
         /// <param name="session">会话</param>
-        public static void Add<THandler>(this ISocket session) where THandler : IHandler, new()
-        {
-            if (session.Pipeline == null) session.Pipeline = new Pipeline();
-
-            session.Pipeline.AddLast(new THandler());
-        }
+        public static void Add<THandler>(this ISocket session) where THandler : IHandler, new() => GetPipe(session).AddLast(new THandler());
 
         /// <summary>添加处理器</summary>
         /// <param name="session">会话</param>
         /// <param name="handler">处理器</param>
-        public static void Add(this ISocket session, IHandler handler)
-        {
-            if (session.Pipeline == null) session.Pipeline = new Pipeline();
+        public static void Add(this ISocket session, IHandler handler) => GetPipe(session).AddLast(handler);
 
-            session.Pipeline.AddLast(handler);
-        }
+        private static IPipeline GetPipe(ISocket session) => session.Pipeline ??= new Pipeline();
         #endregion
     }
 }

@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
+using NewLife.Http;
 using NewLife.Messaging;
 using NewLife.Net;
+using NewLife.Reflection;
+using NewLife.Threading;
 
 namespace NewLife.Remoting
 {
@@ -12,17 +14,8 @@ namespace NewLife.Remoting
         /// <summary>主机</summary>
         public IApiHost Host { get; set; }
 
-        ///// <summary>编码器</summary>
-        //public IEncoder Encoder { get; set; }
-
-        ///// <summary>处理器</summary>
-        //public IApiHandler Handler { get; set; }
-
         /// <summary>当前服务器所有会话</summary>
         public IApiSession[] AllSessions => Sessions.ToValueArray().Where(e => e is IApiSession).Cast<IApiSession>().ToArray();
-
-        /// <summary>调用超时时间。默认30_000ms</summary>
-        public Int32 Timeout { get; set; } = 30_000;
 
         public ApiNetServer()
         {
@@ -32,33 +25,30 @@ namespace NewLife.Remoting
 
         /// <summary>初始化</summary>
         /// <param name="config"></param>
+        /// <param name="host"></param>
         /// <returns></returns>
-        public virtual Boolean Init(String config)
+        public virtual Boolean Init(Object config, IApiHost host)
         {
-            Local = new NetUri(config);
+            Host = host;
+
+            Local = config as NetUri;
             // 如果主机为空，监听所有端口
             if (Local.Host.IsNullOrEmpty() || Local.Host == "*") AddressFamily = System.Net.Sockets.AddressFamily.Unspecified;
 
+            // Http封包协议
+            //Add<HttpCodec>();
+            Add(new HttpCodec { AllowParseHeader = true });
+
             // 新生命标准网络封包协议
-            //Add(new StandardCodec { Timeout = Timeout, UserPacket = false });
             Add(Host.GetMessageCodec());
 
             return true;
         }
-
-        ///// <summary>启动中</summary>
-        //protected override void OnStart()
-        //{
-        //    //if (Encoder == null) Encoder = new JsonEncoder();
-        //    if (Encoder == null) throw new ArgumentNullException(nameof(Encoder), "未指定编码器");
-
-        //    base.OnStart();
-        //}
     }
 
     class ApiNetSession : NetSession<ApiNetServer>, IApiSession
     {
-        private IApiHost _Host;
+        private ApiServer _Host;
         /// <summary>主机</summary>
         IApiHost IApiSession.Host => _Host;
 
@@ -66,16 +56,42 @@ namespace NewLife.Remoting
         public DateTime LastActive { get; set; }
 
         /// <summary>所有服务器所有会话，包含自己</summary>
-        public virtual IApiSession[] AllSessions => (_Host as ApiServer).Server.AllSessions;
+        public virtual IApiSession[] AllSessions => _Host.Server.AllSessions;
+
+        /// <summary>令牌</summary>
+        public String Token { get; set; }
+
+        /// <summary>请求参数</summary>
+        public IDictionary<String, Object> Parameters { get; set; }
+
+        /// <summary>第二会话数据</summary>
+        public IDictionary<String, Object> Items2 { get; set; }
+
+        /// <summary>获取/设置 用户会话数据。优先使用第二会话数据</summary>
+        /// <param name="key"></param>
+        /// <returns></returns>
+        public override Object this[String key]
+        {
+            get
+            {
+                var ms = Items2 ?? Items;
+                if (ms.TryGetValue(key, out var rs)) return rs;
+
+                return null;
+            }
+            set
+            {
+                var ms = Items2 ?? Items;
+                ms[key] = value;
+            }
+        }
 
         /// <summary>开始会话处理</summary>
         public override void Start()
         {
+            _Host = Host.Host as ApiServer;
+
             base.Start();
-
-            _Host = Host.Host;
-
-            if (_Host is ApiHost host) host.OnNewSession(this, null);
         }
 
         /// <summary>查找Api动作</summary>
@@ -86,7 +102,15 @@ namespace NewLife.Remoting
         /// <summary>创建控制器实例</summary>
         /// <param name="api"></param>
         /// <returns></returns>
-        public virtual Object CreateController(ApiAction api) => _Host.CreateController(this, api);
+        public virtual Object CreateController(ApiAction api)
+        {
+            var controller = api.Controller;
+            if (controller != null) return controller;
+
+            controller = api.Type.CreateInstance();
+
+            return controller;
+        }
 
         protected override void OnReceive(ReceivedEventArgs e)
         {
@@ -96,29 +120,30 @@ namespace NewLife.Remoting
             var msg = e.Message as IMessage;
             if (msg == null || msg.Reply) return;
 
-            var rs = _Host.Process(this, msg);
-            if (rs != null) Session?.SendMessage(rs);
+            // 连接复用
+            if (_Host is ApiServer svr && svr.Multiplex)
+            {
+                // 如果消息使用了原来SEAE的数据包，需要拷贝，避免多线程冲突
+                // 也可能在粘包处理时，已经拷贝了一次
+                if (e.Packet != null)
+                {
+                    if (msg.Payload != null && e.Packet.Data == msg.Payload.Data)
+                    {
+                        msg.Payload = msg.Payload.Clone();
+                    }
+                }
+
+                ThreadPoolX.QueueUserWorkItem(m =>
+                {
+                    var rs = _Host.Process(this, m);
+                    if (rs != null && Session != null && !Session.Disposed) Session?.SendMessage(rs);
+                }, msg);
+            }
+            else
+            {
+                var rs = _Host.Process(this, msg);
+                if (rs != null && Session != null && !Session.Disposed) Session?.SendMessage(rs);
+            }
         }
-
-        ///// <summary>创建消息</summary>
-        ///// <param name="pk"></param>
-        ///// <returns></returns>
-        //public IMessage CreateMessage(Packet pk) => new Message { Payload = pk };
-
-        /// <summary>远程调用</summary>
-        /// <typeparam name="TResult"></typeparam>
-        /// <param name="action">服务操作</param>
-        /// <param name="args">参数</param>
-        /// <param name="flag">标识</param>
-        /// <returns></returns>
-        public async Task<TResult> InvokeAsync<TResult>(String action, Object args = null, Byte flag = 0) => (TResult)await ApiHostHelper.InvokeAsync(_Host, this, typeof(TResult), action, args, flag);
-
-        async Task<Tuple<IMessage, Object>> IApiSession.SendAsync(IMessage msg)
-        {
-            var rs = await Session.SendMessageAsync(msg) as IMessage;
-            return new Tuple<IMessage, Object>(rs, Session);
-        }
-
-        Boolean IApiSession.Send(IMessage msg) => Session.SendMessage(msg);
     }
 }

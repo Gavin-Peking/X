@@ -34,17 +34,23 @@ namespace XCode.DataAccessLayer
         [Description("数据类型")]
         public Type DataType { get; set; }
 
-        /// <summary>字段类型</summary>
-        [XmlIgnore]
-        [DisplayName("字段类型")]
-        [Description("字段类型")]
-        public String FieldType { get { return DataType?.Name; } set { DataType = value.GetTypeEx(); } }
+        ///// <summary>字段类型</summary>
+        //[XmlIgnore]
+        //[DisplayName("字段类型")]
+        //[Description("字段类型")]
+        //public String FieldType { get { return DataType?.Name; } set { DataType = value.GetTypeEx(); } }
 
         /// <summary>原始数据类型</summary>
         [XmlAttribute]
         [DisplayName("原始类型")]
         [Description("原始类型")]
         public String RawType { get; set; }
+
+        /// <summary>元素类型</summary>
+        [XmlAttribute]
+        [DisplayName("元素类型")]
+        [Description("元素类型")]
+        public String ItemType { get; set; }
 
         /// <summary>标识</summary>
         [XmlAttribute]
@@ -149,19 +155,16 @@ namespace XCode.DataAccessLayer
         public override String ToString()
         {
             if (!String.IsNullOrEmpty(DisplayName) && DisplayName != Name)
-                return String.Format("Name={0} FieldType={1} RawType={2} DisplayName={3}", ColumnName, FieldType, RawType, DisplayName);
+                return String.Format("Name={0} DataType={1} RawType={2} DisplayName={3}", ColumnName, DataType?.Name, RawType, DisplayName);
             else
-                return String.Format("Name={0} FieldType={1} RawType={2}", ColumnName, FieldType, RawType);
+                return String.Format("Name={0} DataType={1} RawType={2}", ColumnName, DataType?.Name, RawType);
         }
         #endregion
 
         #region ICloneable 成员
         /// <summary>克隆</summary>
         /// <returns></returns>
-        Object ICloneable.Clone()
-        {
-            return Clone(Table);
-        }
+        Object ICloneable.Clone() => Clone(Table);
 
         /// <summary>克隆</summary>
         /// <param name="table"></param>

@@ -31,7 +31,7 @@ namespace NewLife.Collections
         /// <summary>查找数据的方法</summary>
         public Func<TKey, TValue> FindMethod { get; set; }
 
-        private ConcurrentDictionary<TKey, CacheItem> _cache;
+        private readonly ConcurrentDictionary<TKey, CacheItem> _cache;
         #endregion
 
         #region 构造
@@ -57,9 +57,9 @@ namespace NewLife.Collections
 
         /// <summary>销毁</summary>
         /// <param name="disposing"></param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             _count = 0;
             //_cache.Clear();
@@ -148,7 +148,7 @@ namespace NewLife.Collections
                 }
             }
 
-            return default(TValue);
+            return default;
         }
 
         /// <summary>获取 GetOrAdd</summary>
@@ -156,9 +156,24 @@ namespace NewLife.Collections
         /// <returns></returns>
         public virtual TValue Get(TKey key)
         {
-            if (!_cache.TryGetValue(key, out var item)) return default(TValue);
+            if (!_cache.TryGetValue(key, out var item) || item.Expired) return default;
 
             return item.Visit();
+        }
+
+        /// <summary>尝试获取数据</summary>
+        /// <param name="key"></param>
+        /// <param name="value"></param>
+        /// <returns></returns>
+        public virtual Boolean TryGetValue(TKey key, out TValue value)
+        {
+            value = default;
+
+            if (!_cache.TryGetValue(key, out var item) || item.Expired) return false;
+
+            value = item.Visit();
+
+            return true;
         }
 
         /// <summary>设置 AddOrUpdate</summary>
@@ -196,7 +211,7 @@ namespace NewLife.Collections
 
             Interlocked.Increment(ref _count);
 
-            resultingValue = default(TValue);
+            resultingValue = default;
 
             StartTimer();
 
@@ -207,8 +222,6 @@ namespace NewLife.Collections
         /// <param name="key">键</param>
         /// <param name="func">获取值的委托，该委托以键作为参数</param>
         /// <returns></returns>
-        //[DebuggerHidden]
-        //[Obsolete]
         public virtual TValue GetItem(TKey key, Func<TKey, TValue> func)
         {
             var exp = Expire;

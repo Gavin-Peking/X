@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Web;
 using NewLife.Model;
 using NewLife.Threading;
@@ -42,11 +43,7 @@ namespace XCode.Membership
 
         /// <summary>实例化</summary>
         /// <param name="provider"></param>
-        public UserModule(IManageProvider provider)
-        {
-            //Provider = provider ?? ManageProvider.Provider;
-            Provider = provider;
-        }
+        public UserModule(IManageProvider provider) => Provider = provider;
         #endregion
 
         /// <summary>初始化。检查是否匹配</summary>
@@ -81,11 +78,8 @@ namespace XCode.Membership
 
             // 当前登录用户
             var prv = Provider ?? ManageProvider.Provider;
-#if !__CORE__
-            var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
-#else
+            //var user = prv?.Current ?? HttpContext.Current?.User?.Identity as IManageUser;
             var user = prv?.Current;
-#endif
             if (user != null)
             {
                 if (isNew)
@@ -198,12 +192,12 @@ namespace XCode.Membership
         {
             if (!isNew && !entity.HasDirty) return true;
 
-            var ip = WebHelper.UserHost;
+            var ip = ManageProvider.UserHost;
             if (!ip.IsNullOrEmpty())
             {
                 // 如果不是IPv6，去掉后面端口
                 if (ip.Contains("://")) ip = ip.Substring("://", null);
-                if (ip.Contains(":") && !ip.Contains("::")) ip = ip.Substring(null, ":");
+                //if (ip.Contains(":") && !ip.Contains("::")) ip = ip.Substring(null, ":");
 
                 var fs = GetFields(entity.GetType());
 
@@ -228,7 +222,7 @@ namespace XCode.Membership
             return true;
         }
 
-        private static ConcurrentDictionary<Type, ICollection<FieldItem>> _ipFieldNames = new ConcurrentDictionary<Type, ICollection<FieldItem>>();
+        private static readonly ConcurrentDictionary<Type, ICollection<FieldItem>> _ipFieldNames = new ConcurrentDictionary<Type, ICollection<FieldItem>>();
         /// <summary>获取实体类的字段名。带缓存</summary>
         /// <param name="entityType"></param>
         /// <returns></returns>

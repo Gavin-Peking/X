@@ -18,7 +18,7 @@ namespace XCode
 
         private MapProvider _Provider;
         /// <summary>目标提供者</summary>
-        public MapProvider Provider { get { return _Provider ?? (_Provider = GetProvider(_Type, _Key)); } set { _Provider = value; } }
+        public MapProvider Provider { get { return _Provider ??= GetProvider(_Type, _Key); } set { _Provider = value; } }
         #endregion
 
         #region 构造
@@ -52,7 +52,7 @@ namespace XCode
             // 区分实体类和提供者
             if (type.As<MapProvider>()) return Activator.CreateInstance(type) as MapProvider;
 
-            if (key.IsNullOrEmpty()) key = EntityFactory.CreateOperate(type)?.Unique?.Name;
+            if (key.IsNullOrEmpty()) key = type.AsFactory()?.Unique?.Name;
             return new MapProvider { EntityType = type, Key = key };
         }
         #endregion
@@ -74,7 +74,7 @@ namespace XCode
         /// <returns></returns>
         public virtual IDictionary<Object, String> GetDataSource()
         {
-            var fact = EntityFactory.CreateOperate(EntityType);
+            var fact = EntityType.AsFactory();
 
             var key = Key;
             var mst = fact.Master?.Name;

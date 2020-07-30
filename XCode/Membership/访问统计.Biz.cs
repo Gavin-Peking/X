@@ -69,16 +69,24 @@ namespace XCode.Membership
             // 过滤器 UserModule、TimeModule、IPModule
             Meta.Modules.Add<TimeModule>();
 
-            //// 单对象缓存从键
-            //var sc = Meta.SingleCache;
-            //if (sc.Expire < 20 * 60) sc.Expire = 20 * 60;
-            //sc.FindSlaveKeyMethod = k => FindByModel(GetModel(k), false);
-            //sc.GetSlaveKeyMethod = e => GetKey(e.ToModel());
-
-#if !DEBUG
+            //#if !DEBUG
             // 关闭SQL日志
             Meta.Session.Dal.Db.ShowSQL = false;
-#endif
+            //#endif
+        }
+
+        /// <summary>验证数据，通过抛出异常的方式提示验证失败。</summary>
+        /// <param name="isNew"></param>
+        public override void Valid(Boolean isNew)
+        {
+            // 截取长度
+            var len = _.Title.Length;
+            if (len <= 0) len = 50;
+            if (!Title.IsNullOrEmpty() && Title.Length > len) Title = Title.Substring(0, len);
+
+            len = _.Page.Length;
+            if (len <= 0) len = 50;
+            if (!Page.IsNullOrEmpty() && Page.Length > len) Page = Page.Substring(0, len);
         }
         #endregion
 
@@ -102,7 +110,7 @@ namespace XCode.Membership
             //return Find(_.ID == id);
         }
 
-        private static DictionaryCache<VisitStatModel, VisitStat> _cache = new DictionaryCache<VisitStatModel, VisitStat> { Expire = 20 * 60, Period = 60 };
+        private static readonly DictionaryCache<VisitStatModel, VisitStat> _cache = new DictionaryCache<VisitStatModel, VisitStat> { Expire = 20 * 60, Period = 60 };
         /// <summary>根据模型查找</summary>
         /// <param name="model"></param>
         /// <param name="cache"></param>
@@ -111,7 +119,6 @@ namespace XCode.Membership
         {
             if (model == null) return null;
 
-            //if (cache) return Meta.SingleCache.GetItemWithSlaveKey(GetKey(model)) as VisitStat;
             if (cache)
             {
                 if (_cache.FindMethod == null) _cache.FindMethod = m => FindByModel(m, false);
@@ -147,21 +154,15 @@ namespace XCode.Membership
             return FindAll(exp, param);
         }
 
-        static FieldCache<VisitStat> PageCache = new FieldCache<VisitStat>(_.Page);
+        static readonly FieldCache<VisitStat> PageCache = new FieldCache<VisitStat>(__.Page);
 
         /// <summary>查找所有</summary>
         /// <returns></returns>
-        public static IList<VisitStat> FindAllPage()
-        {
-            return PageCache.Entities;
-        }
+        public static IList<VisitStat> FindAllPage() => PageCache.Entities;
 
         /// <summary>获取所有名称</summary>
         /// <returns></returns>
-        public static IDictionary<String, String> FindAllPageName()
-        {
-            return PageCache.FindAllName();
-        }
+        public static IDictionary<String, String> FindAllPageName() => PageCache.FindAllName();
         #endregion
 
         #region 业务操作
@@ -187,7 +188,7 @@ namespace XCode.Membership
             }
 
             // 并行处理
-            Parallel.ForEach(list, m => ProcessItem(m as VisitStatModel));
+            Parallel.ForEach(list, m => ProcessItem(m));
         }
 
         private static VisitStat ProcessItem(VisitStatModel model)
@@ -256,39 +257,6 @@ namespace XCode.Membership
         #endregion
 
         #region 辅助
-        ///// <summary>实体转模型</summary>
-        ///// <returns></returns>
-        //public VisitStatModel ToModel()
-        //{
-        //    var model = new VisitStatModel
-        //    {
-        //        Page = Page,
-        //        Level = Level,
-        //        Time = Time,
-        //    };
-
-        //    return model;
-        //}
-
-        //private static String GetKey(VisitStatModel model)
-        //{
-        //    return $"{model.Page}_{(Int32)model.Level}_{model.Time.ToFullString()}";
-        //}
-
-        //private static VisitStatModel GetModel(String key)
-        //{
-        //    var ks = key.Split("_");
-        //    if (ks.Length < 3) return null;
-
-        //    var model = new VisitStatModel
-        //    {
-        //        Page = ks[0],
-        //        Level = (StatLevels)ks[1].ToInt(),
-        //        Time = ks[2].ToDateTime(),
-        //    };
-
-        //    return model;
-        //}
         #endregion
     }
 }

@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using NewLife.Collections;
 using NewLife.Log;
 using NewLife.Reflection;
 using XCode.Configuration;
@@ -15,7 +14,7 @@ namespace XCode
     public static class EntityFactory
     {
         #region 创建实体操作接口
-        private static ConcurrentDictionary<Type, IEntityOperate> _factories = new ConcurrentDictionary<Type, IEntityOperate>();
+        private static readonly ConcurrentDictionary<Type, IEntityFactory> _factories = new ConcurrentDictionary<Type, IEntityFactory>();
         /// <summary>创建实体操作接口</summary>
         /// <remarks>
         /// 因为只用来做实体操作，所以只需要一个实例即可。
@@ -23,7 +22,7 @@ namespace XCode
         /// </remarks>
         /// <param name="type">类型</param>
         /// <returns></returns>
-        public static IEntityOperate CreateOperate(Type type)
+        public static IEntityFactory CreateOperate(Type type)
         {
             if (type == null) throw new ArgumentNullException(nameof(type));
 
@@ -44,16 +43,13 @@ namespace XCode
         /// <summary>根据类型创建实体工厂</summary>
         /// <param name="type"></param>
         /// <returns></returns>
-        public static IEntityOperate AsFactory(this Type type)
-        {
-            return CreateOperate(type);
-        }
+        public static IEntityFactory AsFactory(this Type type) => CreateOperate(type);
 
         /// <summary>使用指定的实体对象创建实体操作接口，主要用于Entity内部调用，避免反射带来的损耗</summary>
         /// <param name="type">类型</param>
         /// <param name="factory"></param>
         /// <returns></returns>
-        public static IEntityOperate Register(Type type, IEntityOperate factory)
+        public static IEntityFactory Register(Type type, IEntityFactory factory)
         {
             if (factory == null) throw new ArgumentNullException(nameof(factory));
 
@@ -65,21 +61,19 @@ namespace XCode
         #endregion
 
         #region 加载插件
-        /// <summary>列出所有实体类</summary>
-        /// <returns></returns>
-        public static List<Type> LoadEntities()
-        {
-            return typeof(IEntity).GetAllSubclasses().ToList();
-        }
+        ///// <summary>列出所有实体类</summary>
+        ///// <returns></returns>
+        //public static List<Type> LoadEntities()
+        //{
+        //    return typeof(IEntity).GetAllSubclasses().ToList();
+        //}
 
         /// <summary>获取指定连接名下的所有实体类</summary>
         /// <param name="connName"></param>
-        /// <param name="isLoadAssembly">是否从未加载程序集中获取类型。使用仅反射的方法检查目标类型，如果存在，则进行常规加载</param>
         /// <returns></returns>
-        public static IEnumerable<Type> LoadEntities(String connName, Boolean isLoadAssembly = false)
+        public static IEnumerable<Type> LoadEntities(String connName)
         {
-            //return typeof(IEntity).GetAllSubclasses(isLoadAssembly).Where(t => TableItem.Create(t).ConnName == connName);
-            foreach (var item in typeof(IEntity).GetAllSubclasses(isLoadAssembly))
+            foreach (var item in typeof(IEntity).GetAllSubclasses())
             {
                 var ti = TableItem.Create(item);
                 if (ti == null)
@@ -91,21 +85,25 @@ namespace XCode
 
         /// <summary>获取指定连接名下的初始化时检查的所有实体数据表，用于反向工程检查表架构</summary>
         /// <param name="connName"></param>
+        /// <param name="checkMode"></param>
         /// <returns></returns>
-        public static List<IDataTable> GetTables(String connName)
+        public static List<IDataTable> GetTables(String connName, Boolean checkMode)
         {
             var tables = new List<IDataTable>();
             // 记录每个表名对应的实体类
             var dic = new Dictionary<String, Type>(StringComparer.OrdinalIgnoreCase);
             var list = new List<String>();
             var list2 = new List<String>();
-            foreach (var item in LoadEntities(connName, true))
+            foreach (var item in LoadEntities(connName))
             {
                 list.Add(item.Name);
 
                 // 过滤掉第一次使用才加载的
-                var att = item.GetCustomAttribute<ModelCheckModeAttribute>(true);
-                if (att != null && att.Mode != ModelCheckModes.CheckAllTablesWhenInit) continue;
+                if (checkMode)
+                {
+                    var att = item.GetCustomAttribute<ModelCheckModeAttribute>(true);
+                    if (att != null && att.Mode != ModelCheckModes.CheckAllTablesWhenInit) continue;
+                }
                 list2.Add(item.Name);
 
                 var table = TableItem.Create(item).DataTable;

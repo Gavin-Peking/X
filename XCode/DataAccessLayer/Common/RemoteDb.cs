@@ -11,33 +11,20 @@ namespace XCode.DataAccessLayer
         /// <summary>系统数据库名</summary>
         public virtual String SystemDatabaseName => "master";
 
-        /// <summary>数据库服务器版本</summary>
-        public override String ServerVersion
-        {
-            get
-            {
-                var ver = _ServerVersion;
-                if (ver != null) return ver;
-                _ServerVersion = String.Empty;
+        ///// <summary>数据库服务器版本</summary>
+        //public override String ServerVersion
+        //{
+        //    get
+        //    {
+        //        var ver = _ServerVersion;
+        //        if (ver != null) return ver;
+        //        _ServerVersion = String.Empty;
 
-                //var session = CreateSession() as RemoteDbSession;
-                //ver = _ServerVersion = session.ProcessWithSystem(s =>
-                //{
-                //    var conn = Pool.Get();
-                //    try
-                //    {
-                //        return conn.ServerVersion;
-                //    }
-                //    finally
-                //    {
-                //        Pool.Put(conn);
-                //    }
-                //}) as String;
-                ver = _ServerVersion = Pool.Execute(conn => conn.ServerVersion);
+        //        ver = _ServerVersion = Pool.Execute(conn => conn.ServerVersion);
 
-                return ver;
-            }
-        }
+        //        return ver;
+        //    }
+        //}
 
         private String _User;
         /// <summary>用户名UserID</summary>
@@ -84,14 +71,14 @@ namespace XCode.DataAccessLayer
             }
         }
 
-        const String Pooling = "Pooling";
-        protected override void OnSetConnectionString(ConnectionStringBuilder builder)
-        {
-            base.OnSetConnectionString(builder);
+        //const String Pooling = "Pooling";
+        //protected override void OnSetConnectionString(ConnectionStringBuilder builder)
+        //{
+        //    base.OnSetConnectionString(builder);
 
-            // 关闭底层连接池，使用XCode连接池
-            builder.TryAdd(Pooling, "false");
-        }
+        //    // 关闭底层连接池，使用XCode连接池
+        //    builder.TryAdd(Pooling, "false");
+        //}
         #endregion
     }
 
@@ -116,7 +103,7 @@ namespace XCode.DataAccessLayer
             }
             catch (Exception ex)
             {
-                DAL.WriteLog("[3]GetSchema({0})异常重试！{1},连接字符串 {2}", collectionName, ex.Message, ConnectionString, Database.ConnName);
+                DAL.WriteLog("[{2}]GetSchema({0})异常重试！{1}", collectionName, ex.Message, Database.ConnName);
 
                 // 如果没有数据库，登录会失败，需要切换到系统数据库再试试
                 return ProcessWithSystem((s, c) => base.GetSchema(c, collectionName, restrictionValues)) as DataTable;
@@ -134,24 +121,18 @@ namespace XCode.DataAccessLayer
             if (!dbname.IsNullOrEmpty() && !dbname.EqualIgnoreCase(sysdbname))
             {
                 if (DAL.Debug) WriteLog("切换到系统库[{0}]", sysdbname);
-                using (var conn = Database.Factory.CreateConnection())
+                using var conn = Database.Factory.CreateConnection();
+                try
                 {
-                    try
-                    {
-                        conn.ConnectionString = ConnectionString;
+                    //conn.ConnectionString = Database.ConnectionString;
 
-                        OpenDatabase(conn, sysdbname);
+                    OpenDatabase(conn, Database.ConnectionString, sysdbname);
 
-                        //Conn = conn;
-
-                        return callback(this, conn);
-                    }
-                    finally
-                    {
-                        //Conn = null;
-
-                        if (DAL.Debug) WriteLog("退出系统库[{0}]，回到[{1}]", sysdbname, dbname);
-                    }
+                    return callback(this, conn);
+                }
+                finally
+                {
+                    if (DAL.Debug) WriteLog("退出系统库[{0}]，回到[{1}]", sysdbname, dbname);
                 }
             }
             else
@@ -160,10 +141,10 @@ namespace XCode.DataAccessLayer
             }
         }
 
-        private static void OpenDatabase(IDbConnection conn, String dbName)
+        private static void OpenDatabase(IDbConnection conn, String connStr, String dbName)
         {
             // 如果没有打开，则改变链接字符串
-            var builder = new ConnectionStringBuilder(conn.ConnectionString);
+            var builder = new ConnectionStringBuilder(connStr);
             var flag = false;
             if (builder["Database"] != null)
             {
@@ -177,10 +158,11 @@ namespace XCode.DataAccessLayer
             }
             if (flag)
             {
-                var connStr = builder.ToString();
-                conn.ConnectionString = connStr;
+                connStr = builder.ToString();
+                //WriteLog("系统级：{0}", connStr);
             }
 
+            conn.ConnectionString = connStr;
             conn.Open();
         }
         #endregion
@@ -198,7 +180,8 @@ namespace XCode.DataAccessLayer
             var session = Database.CreateSession();
             var databaseName = Database.DatabaseName;
 
-            if (values != null && values.Length > 0 && values[0] is String && values[0] + "" != "") databaseName = values[0] + "";  //ahuang 2014.06.12  类型强制转string的bug
+            // ahuang 2014.06.12  类型强制转string的bug
+            if (values != null && values.Length > 0 && values[0] is String str && !str.IsNullOrEmpty()) databaseName = str;
 
             switch (schema)
             {
@@ -221,13 +204,11 @@ namespace XCode.DataAccessLayer
                         ss.WriteSQL(sql);
                         return ss.ProcessWithSystem((s, c) =>
                         {
-                            using (var cmd = Database.Factory.CreateCommand())
-                            {
-                                cmd.Connection = c;
-                                cmd.CommandText = sql;
+                            using var cmd = Database.Factory.CreateCommand();
+                            cmd.Connection = c;
+                            cmd.CommandText = sql;
 
-                                return cmd.ExecuteNonQuery();
-                            }
+                            return cmd.ExecuteNonQuery();
                         });
                     }
 

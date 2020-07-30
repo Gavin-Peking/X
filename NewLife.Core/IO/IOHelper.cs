@@ -19,21 +19,27 @@ namespace System
         /// <remarks>返回输出流，注意此时指针位于末端</remarks>
         public static Stream Compress(this Stream inStream, Stream outStream = null)
         {
-            if (outStream == null) outStream = new MemoryStream();
+            var ms = outStream ?? new MemoryStream();
 
             // 第三个参数为true，保持数据流打开，内部不应该干涉外部，不要关闭外部的数据流
 #if NET4
-            using (var stream = new DeflateStream(outStream, CompressionMode.Compress, true))
-#else
-            using (var stream = new DeflateStream(outStream, CompressionLevel.Optimal, true))
-#endif
+            using (var stream = new DeflateStream(ms, CompressionMode.Compress, true))
             {
                 inStream.CopyTo(stream);
                 stream.Flush();
-                //stream.Close();
             }
+#else
+            using (var stream = new DeflateStream(ms, CompressionLevel.Optimal, true))
+            {
+                inStream.CopyTo(stream);
+                stream.Flush();
+            }
+#endif
 
-            return outStream;
+            // 内部数据流需要把位置指向开头
+            if (outStream == null) ms.Position = 0;
+
+            return ms;
         }
 
         /// <summary>解压缩数据流</summary>
@@ -42,16 +48,18 @@ namespace System
         /// <remarks>返回输出流，注意此时指针位于末端</remarks>
         public static Stream Decompress(this Stream inStream, Stream outStream = null)
         {
-            if (outStream == null) outStream = new MemoryStream();
+            var ms = outStream ?? new MemoryStream();
 
             // 第三个参数为true，保持数据流打开，内部不应该干涉外部，不要关闭外部的数据流
             using (var stream = new DeflateStream(inStream, CompressionMode.Decompress, true))
             {
-                stream.CopyTo(outStream);
-                //stream.Close();
+                stream.CopyTo(ms);
             }
 
-            return outStream;
+            // 内部数据流需要把位置指向开头
+            if (outStream == null) ms.Position = 0;
+
+            return ms;
         }
 
         /// <summary>压缩字节数组</summary>
@@ -80,21 +88,27 @@ namespace System
         /// <remarks>返回输出流，注意此时指针位于末端</remarks>
         public static Stream CompressGZip(this Stream inStream, Stream outStream = null)
         {
-            if (outStream == null) outStream = new MemoryStream();
+            var ms = outStream ?? new MemoryStream();
 
             // 第三个参数为true，保持数据流打开，内部不应该干涉外部，不要关闭外部的数据流
 #if NET4
-            using (var stream = new GZipStream(outStream, CompressionMode.Compress, true))
-#else
-            using (var stream = new GZipStream(outStream, CompressionLevel.Optimal, true))
-#endif
+            using (var stream = new GZipStream(ms, CompressionMode.Compress, true))
             {
                 inStream.CopyTo(stream);
                 stream.Flush();
-                //stream.Close();
             }
+#else
+            using (var stream = new GZipStream(ms, CompressionLevel.Optimal, true))
+            {
+                inStream.CopyTo(stream);
+                stream.Flush();
+            }
+#endif
 
-            return outStream;
+            // 内部数据流需要把位置指向开头
+            if (outStream == null) ms.Position = 0;
+
+            return ms;
         }
 
         /// <summary>解压缩数据流</summary>
@@ -103,16 +117,18 @@ namespace System
         /// <remarks>返回输出流，注意此时指针位于末端</remarks>
         public static Stream DecompressGZip(this Stream inStream, Stream outStream = null)
         {
-            if (outStream == null) outStream = new MemoryStream();
+            var ms = outStream ?? new MemoryStream();
 
             // 第三个参数为true，保持数据流打开，内部不应该干涉外部，不要关闭外部的数据流
             using (var stream = new GZipStream(inStream, CompressionMode.Decompress, true))
             {
-                stream.CopyTo(outStream);
-                //stream.Close();
+                stream.CopyTo(ms);
             }
 
-            return outStream;
+            // 内部数据流需要把位置指向开头
+            if (outStream == null) ms.Position = 0;
+
+            return ms;
         }
         #endregion
 
@@ -272,7 +288,9 @@ namespace System
             }
 
             des.WriteEncodedInt(src.Length);
-            return des.Write(src);
+            des.Write(src);
+
+            return des;
         }
 
         /// <summary>读取字节数组，先读取压缩整数表示的长度</summary>
@@ -831,7 +849,7 @@ namespace System
             while (num >= 0x80)
             {
                 _encodes[count++] = (Byte)(num | 0x80);
-                num = num >> 7;
+                num >>= 7;
             }
             _encodes[count++] = (Byte)num;
 
@@ -852,7 +870,7 @@ namespace System
             while (num >= 0x80)
             {
                 _encodes[count++] = (Byte)(num | 0x80);
-                num = num >> 7;
+                num >>= 7;
             }
             _encodes[count++] = (Byte)num;
 
@@ -947,7 +965,7 @@ namespace System
                 {
                     //win = 0; // 只要有一个不匹配，马上清零
                     // 不能直接清零，那样会导致数据丢失，需要逐位探测，窗口一个个字节滑动
-                    i = i - win;
+                    i -= win;
                     win = 0;
                 }
             }
@@ -1247,11 +1265,7 @@ namespace System
             else if (offset + count > data.Length)
                 count = data.Length - offset;
 
-#if __CORE__
-            return Convert.ToBase64String(data, offset, count);
-#else
             return Convert.ToBase64String(data, offset, count, lineBreak ? Base64FormattingOptions.InsertLineBreaks : Base64FormattingOptions.None);
-#endif
         }
 
         /// <summary>字节数组转为Url改进型Base64编码</summary>

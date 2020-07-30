@@ -46,8 +46,9 @@ namespace XCode.DataAccessLayer
                 }
                 if (!css.ContainsKey(connName))
                 {
+                    var cfg = NewLife.Setting.Current;
                     var set = Setting.Current;
-                    var connstr = "Data Source=" + set.SQLiteDbPath.CombinePath(connName + ".db");
+                    var connstr = "Data Source=" + cfg.DataPath.CombinePath(connName + ".db");
                     if (set.Migration <= Migration.On) connstr += ";Migration=On";
                     WriteLog("自动为[{0}]设置SQLite连接字符串：{1}", connName, connstr);
                     AddConnStr(connName, connstr, null, "SQLite");
@@ -62,7 +63,7 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 静态管理
-        private static Dictionary<String, DAL> _dals = new Dictionary<String, DAL>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<String, DAL> _dals = new ConcurrentDictionary<String, DAL>(StringComparer.OrdinalIgnoreCase);
         /// <summary>创建一个数据访问层对象。</summary>
         /// <param name="connName">配置名</param>
         /// <returns>对应于指定链接的全局唯一的数据访问层对象</returns>
@@ -71,18 +72,21 @@ namespace XCode.DataAccessLayer
             if (String.IsNullOrEmpty(connName)) throw new ArgumentNullException(nameof(connName));
 
             // 如果需要修改一个DAL的连接字符串，不应该修改这里，而是修改DAL实例的ConnStr属性
-            if (!_dals.TryGetValue(connName, out var dal))
-            {
-                lock (_dals)
-                {
-                    if (!_dals.TryGetValue(connName, out dal))
-                    {
-                        dal = new DAL(connName);
-                        // 不用connName，因为可能在创建过程中自动识别了ConnName
-                        _dals.Add(dal.ConnName, dal);
-                    }
-                }
-            }
+            //if (!_dals.TryGetValue(connName, out var dal))
+            //{
+            //    lock (_dals)
+            //    {
+            //        if (!_dals.TryGetValue(connName, out dal))
+            //        {
+            //            dal = new DAL(connName);
+            //            // 不用connName，因为可能在创建过程中自动识别了ConnName
+            //            _dals.Add(dal.ConnName, dal);
+            //        }
+            //    }
+            //}
+
+            // Dictionary.TryGetValue 在多线程高并发下有可能抛出空异常
+            var dal = _dals.GetOrAdd(connName, k => new DAL(k));
 
             // 创建完成对象后，初始化时单独锁这个对象，避免整体加锁
             dal.Init();
@@ -99,15 +103,12 @@ namespace XCode.DataAccessLayer
             _Tables = null;
             _hasCheck = false;
             HasCheckTables.Clear();
-#if !__CORE__
-            _Assembly = null;
-#endif
 
-            GC.Collect();
+            GC.Collect(2);
         }
 
         private static Dictionary<String, String> _connStrs;
-        private static Dictionary<String, Type> _connTypes = new Dictionary<String, Type>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<String, Type> _connTypes = new Dictionary<String, Type>(StringComparer.OrdinalIgnoreCase);
         /// <summary>链接字符串集合</summary>
         /// <remarks>
         /// 如果需要修改一个DAL的连接字符串，不应该修改这里，而是修改DAL实例的<see cref="ConnStr"/>属性
@@ -159,7 +160,7 @@ namespace XCode.DataAccessLayer
                     if (!File.Exists(file)) file = Directory.GetCurrentDirectory() + "/appsettings.json";//Asp.Net Core的Debug模式下配置文件位于项目目录而不是输出目录
                     if (File.Exists(file))
                     {
-                        var dic = new JsonParser(File.ReadAllText(file)).Decode() as IDictionary<String, Object>;
+                        var dic = JsonParser.Decode(File.ReadAllText(file));
                         dic = dic?["ConnectionStrings"] as IDictionary<String, Object>;
                         if (dic != null && dic.Count > 0)
                         {
@@ -225,7 +226,7 @@ namespace XCode.DataAccessLayer
         /// <summary>找不到连接名时调用。支持用户自定义默认连接</summary>
         public static event EventHandler<ResolveEventArgs> OnResolve;
 
-        private static ConcurrentDictionary<String, Tuple<String, String>> _defs = new ConcurrentDictionary<String, Tuple<String, String>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<String, Tuple<String, String>> _defs = new ConcurrentDictionary<String, Tuple<String, String>>(StringComparer.OrdinalIgnoreCase);
         /// <summary>注册默认连接字符串。无法从配置文件获取时使用</summary>
         /// <param name="connName">连接名</param>
         /// <param name="connStr">连接字符串</param>
@@ -474,7 +475,7 @@ namespace XCode.DataAccessLayer
 
             try
             {
-                var list = EntityFactory.GetTables(name);
+                var list = EntityFactory.GetTables(name, true);
                 if (list != null && list.Count > 0)
                 {
                     // 移除所有已初始化的
@@ -519,37 +520,6 @@ namespace XCode.DataAccessLayer
             }
 
             Db.CreateMetaData().SetTables(Db.Migration, tables);
-        }
-        #endregion
-
-        #region 创建数据操作实体
-#if !__CORE__
-        private EntityAssembly _Assembly;
-        /// <summary>根据数据模型动态创建的程序集</summary>
-        public EntityAssembly Assembly
-        {
-            get
-            {
-                return _Assembly ?? (_Assembly = EntityAssembly.CreateWithCache(ConnName, Tables));
-            }
-            set { _Assembly = value; }
-        }
-#endif
-
-        /// <summary>创建实体操作接口</summary>
-        /// <remarks>因为只用来做实体操作，所以只需要一个实例即可</remarks>
-        /// <param name="tableName"></param>
-        /// <returns></returns>
-        public IEntityOperate CreateOperate(String tableName)
-        {
-#if !__CORE__
-            var type = Assembly?.GetType(tableName);
-            if (type == null) return null;
-
-            return EntityFactory.CreateOperate(type);
-#else
-            return null;
-#endif
         }
         #endregion
     }

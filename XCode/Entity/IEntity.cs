@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Data;
 using NewLife.Reflection;
 
 namespace XCode
@@ -20,6 +18,9 @@ namespace XCode
 
         /// <summary>是否来自数据库。设置相同属性值时不改变脏数据</summary>
         Boolean IsFromDatabase { get; }
+
+        /// <summary>累加</summary>
+        IEntityAddition Addition { get; }
         #endregion
 
         #region 空主键

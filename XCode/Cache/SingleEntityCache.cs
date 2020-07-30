@@ -22,11 +22,14 @@ namespace XCode.Cache
         /// <summary>过期时间。单位是秒，默认60秒</summary>
         public Int32 Expire { get; set; }
 
+        /// <summary>清理周期。默认60秒检查一次，清理10倍（600秒）未访问的缓存项</summary>
+        public Int32 ClearPeriod { get; set; } = 60;
+
         /// <summary>最大实体数。默认10000</summary>
         public Int32 MaxEntity { get; set; } = 10000;
 
         /// <summary>是否在使用缓存</summary>
-        public Boolean Using { get; private set; }
+        public Boolean Using { get; set; }
         #endregion
 
         #region 主键
@@ -64,9 +67,9 @@ namespace XCode.Cache
         /// <summary>子类重载实现资源释放逻辑时必须首先调用基类方法</summary>
         /// <param name="disposing">从Dispose调用（释放所有资源）还是析构函数调用（释放非托管资源）。
         /// 因为该方法只会被调用一次，所以该参数的意义不太大。</param>
-        protected override void OnDispose(Boolean disposing)
+        protected override void Dispose(Boolean disposing)
         {
-            base.OnDispose(disposing);
+            base.Dispose(disposing);
 
             try
             {
@@ -86,8 +89,8 @@ namespace XCode.Cache
         {
             if (_Timer == null)
             {
-                var period = Expire * 1000;
-                if (period > 60 * 1000) period = 60 * 1000;
+                var period = ClearPeriod * 1000;
+                //if (period > 60 * 1000) period = 60 * 1000;
 
                 // 启动一个定时器，用于定时清理过期缓存。因为比较耗时，最后一个参数采用线程池
                 _Timer = new TimerX(CheckExpire, null, period, period, "SC")
@@ -100,7 +103,7 @@ namespace XCode.Cache
         private void CheckExpire(Object state)
         {
             var es = Entities;
-            if (es == null) return;
+            if (es == null || es.IsEmpty) return;
 
             // 过期时间升序，用于缓存满以后删除
             var slist = new SortedList<DateTime, IList<CacheItem>>();
@@ -110,7 +113,7 @@ namespace XCode.Cache
             if (MaxEntity <= 0 || over < 0) slist = null;
 
             // 找到所有很久未访问的缓存项，10倍
-            var exp = TimerX.Now.AddSeconds(-10 * Expire);
+            var exp = TimerX.Now.AddSeconds(-10 * ClearPeriod);
             var list = new List<CacheItem>();
             foreach (var item in es)
             {
@@ -192,7 +195,7 @@ namespace XCode.Cache
         private Int32 _Count;
 
         /// <summary>单对象缓存</summary>
-        private ConcurrentDictionary<TKey, CacheItem> Entities = new ConcurrentDictionary<TKey, CacheItem>();
+        private readonly ConcurrentDictionary<TKey, CacheItem> Entities = new ConcurrentDictionary<TKey, CacheItem>();
 
         private ConcurrentDictionary<String, CacheItem> _SlaveEntities;
         /// <summary>单对象缓存，从键查询使用</summary>
@@ -246,7 +249,7 @@ namespace XCode.Cache
         /// <summary>根据主键获取实体数据</summary>
         /// <param name="key"></param>
         /// <returns></returns>
-        public TEntity this[TKey key] { get { return GetItem(Entities, key); } set { Add(key, value); } }
+        public TEntity this[TKey key] { get => GetItem(Entities, key); set => Add(key, value); }
 
         private TEntity GetItem<TKey2>(ConcurrentDictionary<TKey2, CacheItem> dic, TKey2 key)
         {

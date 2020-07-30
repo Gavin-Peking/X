@@ -1,15 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Data.Common;
 using System.Linq;
+using System.Runtime.Serialization;
 using System.Security.Principal;
-using System.Web;
 using System.Web.Script.Serialization;
 using System.Xml.Serialization;
+using NewLife.Data;
 using NewLife.Log;
 using NewLife.Model;
-using NewLife.Web;
 
 namespace XCode.Membership
 {
@@ -51,6 +50,7 @@ namespace XCode.Membership
             // 不过这不是理由，同一个线程遇到同一个锁不会堵塞
             // 发生死锁的可能性是这里引发EnsureInit，而另一个线程提前引发EnsureInit拿到锁
             Meta.Factory.AdditionalFields.Add(__.Logins);
+            //Meta.Factory.FullInsert = false;
 
             // 单对象缓存
             var sc = Meta.SingleCache;
@@ -123,80 +123,19 @@ namespace XCode.Membership
         #endregion
 
         #region 扩展属性
-        /// <summary>当前登录用户</summary>
-        [Obsolete]
-        public static TEntity Current
-        {
-            get
-            {
-#if !__CORE__
-                var key = "Admin";
-                var ss = HttpContext.Current?.Session;
-                if (ss == null) return null;
-                var ms = HttpContext.Current.Items;
-
-                // 从Session中获取
-                return ss[key] as TEntity;
-                //if (ss[key] is TEntity entity) return entity;
-
-                //// 设置一个陷阱，避免重复计算Cookie
-                //if (ms[key] != null) return null;
-
-                //// 从Cookie中获取
-                //entity = GetCookie(key);
-                //if (entity != null)
-                //    ss[key] = entity;
-                //else
-                //    ms[key] = "1";
-
-                //return entity;
-#else
-                return null;
-#endif
-            }
-            set
-            {
-#if !__CORE__
-                var key = "Admin";
-                var ss = HttpContext.Current?.Session;
-                if (ss == null) return;
-
-                // 特殊处理注销
-                if (value == null)
-                {
-                    if (ss[key] is TEntity entity) WriteLog("注销", entity.Name);
-
-                    // 修改Session
-                    ss.Remove(key);
-                }
-                else
-                {
-                    // 修改Session
-                    ss[key] = value;
-                }
-
-                //// 修改Cookie
-                //SetCookie(key, value);
-#else
-                // 特殊处理注销
-                if (value == null)
-                {
-                    var entity = Current;
-                    if (entity != null) WriteLog("注销", entity.Name);
-                }
-#endif
-            }
-        }
-
-        /// <summary>友好名字</summary>
-        [XmlIgnore, ScriptIgnore]
-        public virtual String FriendName => String.IsNullOrEmpty(DisplayName) ? Name : DisplayName;
-
         /// <summary>物理地址</summary>
         [DisplayName("物理地址")]
-        //[BindRelation(__.LastLoginIP)]
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public String LastLoginAddress => LastLoginIP.IPToAddress();
+
+        /// <summary>部门</summary>
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
+        public Department Department => Extends.Get(nameof(Department), k => Department.FindByID(DepartmentID));
+
+        /// <summary>部门</summary>
+        [Map(__.DepartmentID, typeof(Department), __.ID)]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
+        public String DepartmentName => Department?.ToString();
         #endregion
 
         #region 扩展查询
@@ -233,10 +172,9 @@ namespace XCode.Membership
         {
             if (mail.IsNullOrEmpty()) return null;
 
-            if (Meta.Count >= 1000)
-                return Find(__.Mail, mail);
-            else // 实体缓存
-                return Meta.Cache.Find(e => e.Mail.EqualIgnoreCase(mail));
+            if (Meta.Count < 1000) return Meta.Cache.Find(e => e.Mail.EqualIgnoreCase(mail));
+
+            return Find(__.Mail, mail);
         }
 
         /// <summary>根据手机号码查找</summary>
@@ -246,10 +184,9 @@ namespace XCode.Membership
         {
             if (mobile.IsNullOrEmpty()) return null;
 
-            if (Meta.Count >= 1000)
-                return Find(__.Mobile, mobile);
-            else // 实体缓存
-                return Meta.Cache.Find(e => e.Mobile.EqualIgnoreCase(mobile));
+            if (Meta.Count < 1000) return Meta.Cache.Find(e => e.Mobile == mobile);
+
+            return Find(__.Mobile, mobile);
         }
 
         /// <summary>根据唯一代码查找</summary>
@@ -259,10 +196,9 @@ namespace XCode.Membership
         {
             if (code.IsNullOrEmpty()) return null;
 
-            if (Meta.Count >= 1000)
-                return Find(__.Code, code);
-            else // 实体缓存
-                return Meta.Cache.Find(e => e.Code.EqualIgnoreCase(code));
+            if (Meta.Count < 1000) return Meta.Cache.Find(e => e.Code.EqualIgnoreCase(code));
+
+            return Find(__.Code, code);
         }
         #endregion
 
@@ -273,7 +209,7 @@ namespace XCode.Membership
         /// <param name="isEnable"></param>
         /// <param name="p"></param>
         /// <returns></returns>
-        public static IList<TEntity> Search(String key, Int32 roleId, Boolean? isEnable, Pager p) => Search(key, roleId, isEnable, DateTime.MinValue, DateTime.MinValue, p);
+        public static IList<TEntity> Search(String key, Int32 roleId, Boolean? isEnable, PageParameter p) => Search(key, roleId, isEnable, DateTime.MinValue, DateTime.MinValue, p);
 
         /// <summary>高级查询</summary>
         /// <param name="key"></param>
@@ -283,7 +219,7 @@ namespace XCode.Membership
         /// <param name="end"></param>
         /// <param name="p"></param>
         /// <returns></returns>
-        public static IList<TEntity> Search(String key, Int32 roleId, Boolean? isEnable, DateTime start, DateTime end, Pager p)
+        public static IList<TEntity> Search(String key, Int32 roleId, Boolean? isEnable, DateTime start, DateTime end, PageParameter p)
         {
             var exp = _.LastLogin.Between(start, end);
             if (roleId > 0) exp &= _.RoleID == roleId | _.RoleIDs.Contains("," + roleId + ",");
@@ -299,6 +235,27 @@ namespace XCode.Membership
             }
 
             return FindAll(exp, p);
+        }
+
+        /// <summary>高级搜索</summary>
+        /// <param name="roleId">角色</param>
+        /// <param name="departmentId">部门</param>
+        /// <param name="enable">启用</param>
+        /// <param name="start">登录时间开始</param>
+        /// <param name="end">登录时间结束</param>
+        /// <param name="key">关键字，搜索代码、名称、昵称、手机、邮箱</param>
+        /// <param name="page"></param>
+        /// <returns></returns>
+        public static IList<TEntity> Search(Int32 roleId, Int32 departmentId, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
+        {
+            var exp = new WhereExpression();
+            if (roleId >= 0) exp &= _.RoleID == roleId | _.RoleIDs.Contains("," + roleId + ",");
+            if (departmentId >= 0) exp &= _.DepartmentID == departmentId;
+            if (enable != null) exp &= _.Enable == enable.Value;
+            exp &= _.LastLogin.Between(start, end);
+            if (!key.IsNullOrEmpty()) exp &= _.Code.StartsWith(key) | _.Name.StartsWith(key) | _.DisplayName.StartsWith(key) | _.Mobile.StartsWith(key) | _.Mail.StartsWith(key);
+
+            return FindAll(exp, page);
         }
         #endregion
 
@@ -332,7 +289,7 @@ namespace XCode.Membership
 
         /// <summary>已重载。显示友好名字</summary>
         /// <returns></returns>
-        public override String ToString() => FriendName;
+        public override String ToString() => DisplayName.IsNullOrEmpty() ? Name : DisplayName;
         #endregion
 
         #region 业务
@@ -343,31 +300,23 @@ namespace XCode.Membership
         /// <returns></returns>
         public static TEntity Login(String username, String password, Boolean rememberme = false)
         {
-            if (String.IsNullOrEmpty(username)) throw new ArgumentNullException("username");
+            if (String.IsNullOrEmpty(username)) throw new ArgumentNullException(nameof(username));
             //if (String.IsNullOrEmpty(password)) throw new ArgumentNullException("password");
 
             try
             {
-                var user = Login(username, password, 1);
-#if !__CORE__
-                //if (rememberme && user != null)
-                //{
-                //    var cookie = HttpContext.Current.Response.Cookies["Admin"];
-                //    if (cookie != null) cookie.Expires = DateTime.Now.Date.AddYears(1);
-                //}
-#endif
-                return user;
+                return Login(username, password, 1);
             }
             catch (Exception ex)
             {
-                WriteLog("登录", username + "登录失败！" + ex.Message);
+                WriteLog("登录", false, username + "登录失败！" + ex.Message);
                 throw;
             }
         }
 
         static TEntity Login(String username, String password, Int32 hashTimes)
         {
-            if (String.IsNullOrEmpty(username)) throw new ArgumentNullException("username", "该帐号不存在！");
+            if (String.IsNullOrEmpty(username)) throw new ArgumentNullException(nameof(username), "该帐号不存在！");
 
             // 过滤帐号中的空格，防止出现无操作无法登录的情况
             var account = username.Trim();
@@ -425,9 +374,9 @@ namespace XCode.Membership
             user.SaveLoginInfo();
 
             if (hashTimes == -1)
-                WriteLog("自动登录", username);
+                WriteLog("自动登录", true, username);
             else
-                WriteLog("登录", username);
+                WriteLog("登录", true, username);
 
             return user;
         }
@@ -438,8 +387,8 @@ namespace XCode.Membership
         {
             Logins++;
             LastLogin = DateTime.Now;
-            var ip = WebHelper.UserHost;
-            if (!String.IsNullOrEmpty(ip)) LastLoginIP = ip;
+            var ip = ManageProvider.UserHost;
+            if (!ip.IsNullOrEmpty()) LastLoginIP = ip;
 
             Online = true;
 
@@ -450,12 +399,12 @@ namespace XCode.Membership
         public virtual void Logout()
         {
             //var user = Current;
-            var user = this;
-            if (user != null)
-            {
-                user.Online = false;
-                user.SaveAsync();
-            }
+            //var user = this;
+            //if (user != null)
+            //{
+            //    user.Online = false;
+            //    user.SaveAsync();
+            //}
 
             //Current = null;
             //Thread.CurrentPrincipal = null;
@@ -464,26 +413,24 @@ namespace XCode.Membership
         /// <summary>注册用户。第一注册用户自动抢管理员</summary>
         public virtual void Register()
         {
-            using (var tran = Meta.CreateTrans())
+            using var tran = Meta.CreateTrans();
+            //!!! 第一个用户注册时，如果只有一个默认admin账号，则自动抢管理员
+            if (Meta.Count < 3 && FindCount() <= 1)
             {
-                //!!! 第一个用户注册时，如果只有一个默认admin账号，则自动抢管理员
-                if (Meta.Count < 3 && FindCount() <= 1)
+                var list = FindAll();
+                if (list.Count == 0 || list.Count == 1 && list[0].DisableAdmin())
                 {
-                    var list = FindAll();
-                    if (list.Count == 0 || list.Count == 1 && list[0].DisableAdmin())
-                    {
-                        RoleID = 1;
-                        Enable = true;
-                    }
+                    RoleID = 1;
+                    Enable = true;
                 }
-
-                RegisterTime = DateTime.Now;
-                RegisterIP = WebHelper.UserHost;
-
-                Insert();
-
-                tran.Commit();
             }
+
+            RegisterTime = DateTime.Now;
+            RegisterIP = ManageProvider.UserHost;
+
+            Insert();
+
+            tran.Commit();
         }
 
         /// <summary>禁用默认管理员</summary>
@@ -500,76 +447,16 @@ namespace XCode.Membership
 
             return true;
         }
-
-#if !__CORE__
-        //static Boolean _isInGetCookie;
-        //static TEntity GetCookie(String key)
-        //{
-        //    if (_isInGetCookie) return null;
-
-        //    var cookie = HttpContext.Current.Request.Cookies[key];
-        //    if (cookie == null) return null;
-
-        //    var user = HttpUtility.UrlDecode(cookie["u"]);
-        //    var pass = cookie["p"];
-        //    if (String.IsNullOrEmpty(user) || String.IsNullOrEmpty(pass)) return null;
-
-        //    _isInGetCookie = true;
-        //    try
-        //    {
-        //        return Login(user, pass, -1);
-        //    }
-        //    catch (DbException ex)
-        //    {
-        //        XTrace.WriteLine("{0}登录失败！{1}", user, ex);
-        //        return null;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        WriteLog("登录", user + "登录失败！" + ex.Message);
-        //        return null;
-        //    }
-        //    finally { _isInGetCookie = false; }
-        //}
-
-        //static void SetCookie(String key, TEntity entity)
-        //{
-        //    var context = HttpContext.Current;
-        //    var res = context?.Response;
-        //    if (res == null) return;
-
-        //    var reqcookie = context.Request.Cookies[key];
-        //    if (entity != null)
-        //    {
-        //        var user = HttpUtility.UrlEncode(entity.Name);
-        //        var pass = !String.IsNullOrEmpty(entity.Password) ? entity.Password.MD5() : null;
-        //        if (reqcookie == null || user != reqcookie["u"] || pass != reqcookie["p"])
-        //        {
-        //            // 只有需要写入Cookie时才设置，否则会清空原来的非会话Cookie
-        //            var cookie = res.Cookies[key];
-        //            cookie["u"] = user;
-        //            cookie["p"] = pass;
-        //        }
-        //    }
-        //    else
-        //    {
-        //        var cookie = res.Cookies[key];
-        //        cookie.Value = null;
-        //        cookie.Expires = DateTime.Now.AddYears(-1);
-        //        //HttpContext.Current.Response.Cookies.Remove(key);
-        //    }
-        //}
-#endif
         #endregion
 
         #region 权限
         /// <summary>角色</summary>
         /// <remarks>扩展属性不缓存空对象，一般来说，每个管理员都有对应的角色，如果没有，可能是在初始化</remarks>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public virtual IRole Role => Extends.Get(nameof(Role), k => ManageProvider.Get<IRole>()?.FindByID(RoleID));
 
         /// <summary>角色集合</summary>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public virtual IRole[] Roles => Extends.Get(nameof(Roles), k => GetRoleIDs().Select(e => ManageProvider.Get<IRole>()?.FindByID(e)).Where(e => e != null).ToArray());
 
         /// <summary>获取角色列表。主角色在前，其它角色升序在后</summary>
@@ -585,7 +472,7 @@ namespace XCode.Membership
         /// <summary>角色名</summary>
         [DisplayName("角色")]
         [Map(__.RoleID, typeof(RoleMapProvider))]
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public virtual String RoleName => Role + "";
 
         /// <summary>用户是否拥有当前菜单的指定权限</summary>
@@ -639,15 +526,12 @@ namespace XCode.Membership
         {
             var role = ManageProvider.Get<IRole>();
             EntityType = role.GetType();
-            Key = EntityFactory.CreateOperate(EntityType).Unique?.Name;
+            Key = EntityType.AsFactory().Unique?.Name;
         }
     }
 
     public partial interface IUser
     {
-        /// <summary>友好名字</summary>
-        String FriendName { get; }
-
         /// <summary>角色</summary>
         IRole Role { get; }
 

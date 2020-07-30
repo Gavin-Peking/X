@@ -2,13 +2,12 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Text;
+using System.Runtime.Serialization;
 using System.Web.Script.Serialization;
 using System.Xml.Serialization;
 using NewLife;
 using NewLife.Collections;
 using NewLife.Log;
-using NewLife.Reflection;
 using NewLife.Threading;
 
 namespace XCode.Membership
@@ -59,6 +58,8 @@ namespace XCode.Membership
             // 用于引发基类的静态构造函数
             var entity = new TEntity();
 
+            //Meta.Factory.FullInsert = false;
+
             Meta.Modules.Add<UserModule>();
             Meta.Modules.Add<TimeModule>();
             Meta.Modules.Add<IPModule>();
@@ -100,8 +101,8 @@ namespace XCode.Membership
             }
 
             //CheckRole();
-            // 当前处于事务之中，下面使用Menu会触发异步检查架构，SQLite单线程机制可能会造成死锁
-            ThreadPoolX.QueueUserWorkItem(CheckRole);
+            //// 当前处于事务之中，下面使用Menu会触发异步检查架构，SQLite单线程机制可能会造成死锁
+            //ThreadPoolX.QueueUserWorkItem(CheckRole);
         }
 
         /// <summary>初始化时执行必要的权限检查，以防万一管理员无法操作</summary>
@@ -111,8 +112,8 @@ namespace XCode.Membership
             var list = FindAll();
 
             // 如果某些菜单已经被删除，但是角色权限表仍然存在，则删除
-            var eopMenu = ManageProvider.GetFactory<IMenu>();
-            var menus = eopMenu.FindAll().Cast<IMenu>().ToList();
+            var fact = ManageProvider.GetFactory<IMenu>();
+            var menus = fact.FindAll().Cast<IMenu>().ToList();
             var ids = menus.Select(e => (Int32)e["ID"]).ToArray();
             foreach (var role in list)
             {
@@ -183,7 +184,7 @@ namespace XCode.Membership
             if (Meta.Count <= 1 && FindCount() <= 1)
             {
                 var msg = String.Format("至少保留一个角色[{0}]禁止删除！", name);
-                WriteLog("删除", msg);
+                WriteLog("删除", true, msg);
 
                 throw new XException(msg);
             }
@@ -191,7 +192,7 @@ namespace XCode.Membership
             if (entity.IsSystem)
             {
                 var msg = String.Format("系统角色[{0}]禁止删除！", name);
-                WriteLog("删除", msg);
+                WriteLog("删除", true, msg);
 
                 throw new XException(msg);
             }
@@ -266,9 +267,10 @@ namespace XCode.Membership
         #endregion
 
         #region 扩展权限
+        private IDictionary<Int32, PermissionFlags> _Permissions;
         /// <summary>本角色权限集合</summary>
-        [XmlIgnore, ScriptIgnore]
-        public IDictionary<Int32, PermissionFlags> Permissions { get; } = new Dictionary<Int32, PermissionFlags>();
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
+        public IDictionary<Int32, PermissionFlags> Permissions => _Permissions ??= new Dictionary<Int32, PermissionFlags>();
 
         /// <summary>是否拥有指定资源的指定权限</summary>
         /// <param name="resid"></param>
@@ -303,15 +305,13 @@ namespace XCode.Membership
         /// <param name="flag"></param>
         public void Set(Int32 resid, PermissionFlags flag = PermissionFlags.All)
         {
-            var pf = PermissionFlags.None;
-            if (!Permissions.TryGetValue(resid, out pf))
+            if (Permissions.TryGetValue(resid, out var pf))
             {
-                if (flag != PermissionFlags.None)
-                    Permissions.Add(resid, flag);
+                Permissions[resid] = pf | flag;
             }
             else
             {
-                Permissions[resid] = pf | flag;
+                if (flag != PermissionFlags.None) Permissions.Add(resid, flag);
             }
         }
 
@@ -320,8 +320,7 @@ namespace XCode.Membership
         /// <param name="flag"></param>
         public void Reset(Int32 resid, PermissionFlags flag)
         {
-            var pf = PermissionFlags.None;
-            if (Permissions.TryGetValue(resid, out pf))
+            if (Permissions.TryGetValue(resid, out var pf))
             {
                 Permissions[resid] = pf & ~flag;
             }
@@ -365,9 +364,12 @@ namespace XCode.Membership
 
         void SavePermission()
         {
+            var ps = _Permissions;
+            if (ps == null) return;
+
             // 不能这样子直接清空，因为可能没有任何改变，而这么做会两次改变脏数据，让系统以为有改变
             //Permission = null;
-            if (Permissions.Count <= 0)
+            if (ps.Count <= 0)
             {
                 //Permission = null;
                 SetItem(__.Permission, null);
@@ -376,7 +378,7 @@ namespace XCode.Membership
 
             var sb = Pool.StringBuilder.Get();
             // 根据资源按照从小到大排序一下
-            foreach (var item in Permissions.OrderBy(e => e.Key))
+            foreach (var item in ps.OrderBy(e => e.Key))
             {
                 //// 跳过None
                 //if (item.Value == PermissionFlags.None) continue;
@@ -389,7 +391,7 @@ namespace XCode.Membership
         }
 
         /// <summary>当前角色拥有的资源</summary>
-        [XmlIgnore, ScriptIgnore]
+        [XmlIgnore, ScriptIgnore, IgnoreDataMember]
         public Int32[] Resources { get { return Permissions.Keys.ToArray(); } }
         #endregion
 
@@ -429,6 +431,7 @@ namespace XCode.Membership
             {
                 Name = name,
                 IsSystem = issys,
+                Enable = true,
                 Remark = remark
             };
             entity.Save();

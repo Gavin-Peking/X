@@ -24,12 +24,7 @@ namespace NewLife.IO
             if (stream == null) throw new ArgumentException("filename", String.Format("在程序集{0}中无法找到名为{1}的资源！", asm.GetName().Name, fileName));
 
             if (destFile.IsNullOrEmpty()) destFile = fileName;
-
-            if (!Path.IsPathRooted(destFile))
-            {
-                var str = Runtime.IsWeb ? HttpRuntime.BinDirectory : AppDomain.CurrentDomain.BaseDirectory;
-                destFile = Path.Combine(str, destFile);
-            }
+            destFile = destFile.GetFullPath();
 
             if (File.Exists(destFile) && !overWrite) return;
 
@@ -40,10 +35,8 @@ namespace NewLife.IO
             {
                 if (File.Exists(destFile)) File.Delete(destFile);
 
-                using (var fs = File.Create(destFile))
-                {
-                    IOHelper.CopyTo(stream, fs);
-                }
+                using var fs = File.Create(destFile);
+                IOHelper.CopyTo(stream, fs);
             }
             catch { }
             finally { stream.Dispose(); }
@@ -79,13 +72,8 @@ namespace NewLife.IO
             else
                 ns = names.Where(e => e.StartsWithIgnoreCase(prefix));
 
-            if (String.IsNullOrEmpty(dest)) dest = AppDomain.CurrentDomain.BaseDirectory;
-
-            if (!Path.IsPathRooted(dest))
-            {
-                var str = Runtime.IsWeb ? HttpRuntime.BinDirectory : AppDomain.CurrentDomain.BaseDirectory;
-                dest = Path.Combine(str, dest);
-            }
+            if (String.IsNullOrEmpty(dest)) dest = ".".GetFullPath();
+            dest = dest.GetFullPath();
 
             // 开始处理
             foreach (var item in ns)
@@ -118,10 +106,8 @@ namespace NewLife.IO
                 {
                     if (File.Exists(filename)) File.Delete(filename);
 
-                    using (var fs = File.Create(filename))
-                    {
-                        IOHelper.CopyTo(stream, fs);
-                    }
+                    using var fs = File.Create(filename);
+                    IOHelper.CopyTo(stream, fs);
                 }
                 catch { }
                 finally { stream.Dispose(); }

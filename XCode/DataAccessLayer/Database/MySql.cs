@@ -5,6 +5,7 @@ using System.Data.Common;
 using System.Linq;
 using System.Net;
 using NewLife.Collections;
+using NewLife.Data;
 using NewLife.Reflection;
 
 namespace XCode.DataAccessLayer
@@ -28,7 +29,7 @@ namespace XCode.DataAccessLayer
                         //_Factory = GetProviderFactory("NewLife.MySql.dll", "NewLife.MySql.MySqlClientFactory") ??
                         //           GetProviderFactory("MySql.Data.dll", "MySql.Data.MySqlClient.MySqlClientFactory");
                         // MewLife.MySql 在开发过程中，数据驱动下载站点没有它的包，暂时不支持下载
-                        _Factory = GetProviderFactory(null, "NewLife.MySql.MySqlClientFactory", true) ??
+                        _Factory = GetProviderFactory(null, "NewLife.MySql.MySqlClientFactory", true, true) ??
                                   GetProviderFactory("MySql.Data.dll", "MySql.Data.MySqlClient.MySqlClientFactory");
                     }
                 }
@@ -39,7 +40,7 @@ namespace XCode.DataAccessLayer
 
         const String Server_Key = "Server";
         const String CharSet = "CharSet";
-        const String AllowZeroDatetime = "Allow Zero Datetime";
+        //const String AllowZeroDatetime = "Allow Zero Datetime";
         const String MaxPoolSize = "MaxPoolSize";
         const String Sslmode = "Sslmode";
         protected override void OnSetConnectionString(ConnectionStringBuilder builder)
@@ -91,7 +92,21 @@ namespace XCode.DataAccessLayer
         /// <param name="maximumRows">最大返回行数，0表示所有行</param>
         /// <param name="keyColumn">主键列。用于not in分页</param>
         /// <returns></returns>
-        public override String PageSplit(String sql, Int64 startRowIndex, Int64 maximumRows, String keyColumn)
+        public override String PageSplit(String sql, Int64 startRowIndex, Int64 maximumRows, String keyColumn) => PageSplitByLimit(sql, startRowIndex, maximumRows);
+
+        /// <summary>构造分页SQL</summary>
+        /// <param name="builder">查询生成器</param>
+        /// <param name="startRowIndex">开始行，0表示第一行</param>
+        /// <param name="maximumRows">最大返回行数，0表示所有行</param>
+        /// <returns>分页SQL</returns>
+        public override SelectBuilder PageSplit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows) => PageSplitByLimit(builder, startRowIndex, maximumRows);
+
+        /// <summary>已重写。获取分页</summary>
+        /// <param name="sql">SQL语句</param>
+        /// <param name="startRowIndex">开始行，0表示第一行</param>
+        /// <param name="maximumRows">最大返回行数，0表示所有行</param>
+        /// <returns></returns>
+        public static String PageSplitByLimit(String sql, Int64 startRowIndex, Int64 maximumRows)
         {
             // 从第一行开始，不需要分页
             if (startRowIndex <= 0)
@@ -106,26 +121,21 @@ namespace XCode.DataAccessLayer
         }
 
         /// <summary>构造分页SQL</summary>
-        /// <remarks>
-        /// 两个构造分页SQL的方法，区别就在于查询生成器能够构造出来更好的分页语句，尽可能的避免子查询。
-        /// MS体系的分页精髓就在于唯一键，当唯一键带有Asc/Desc/Unkown等排序结尾时，就采用最大最小值分页，否则使用较次的TopNotIn分页。
-        /// TopNotIn分页和MaxMin分页的弊端就在于无法完美的支持GroupBy查询分页，只能查到第一页，往后分页就不行了，因为没有主键。
-        /// </remarks>
         /// <param name="builder">查询生成器</param>
         /// <param name="startRowIndex">开始行，0表示第一行</param>
         /// <param name="maximumRows">最大返回行数，0表示所有行</param>
         /// <returns>分页SQL</returns>
-        public override SelectBuilder PageSplit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows)
+        public static SelectBuilder PageSplitByLimit(SelectBuilder builder, Int64 startRowIndex, Int64 maximumRows)
         {
             // 从第一行开始，不需要分页
             if (startRowIndex <= 0)
             {
-                if (maximumRows > 0) builder.Limit += " limit {0}".F(maximumRows);
+                if (maximumRows > 0) builder.Limit = "limit {0}".F(maximumRows);
                 return builder;
             }
             if (maximumRows < 1) throw new NotSupportedException("不支持取第几条数据之后的所有数据！");
 
-            builder.Limit += " limit {0}, {1}".F(startRowIndex, maximumRows);
+            builder.Limit = "limit {0}, {1}".F(startRowIndex, maximumRows);
             return builder;
         }
         #endregion
@@ -279,17 +289,18 @@ namespace XCode.DataAccessLayer
         updatetime=values(updatetime);
          */
 
-        private String GetBatchSql(IDataTable table, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        private String GetBatchSql(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
         {
             var sb = Pool.StringBuilder.Get();
             var db = Database as DbBase;
 
             // 字段列表
-            if (columns == null) columns = table.Columns.ToArray();
-            sb.AppendFormat("Insert Into {0}(", db.FormatTableName(table.TableName));
+            //if (columns == null) columns = table.Columns.ToArray();
+            sb.AppendFormat("Insert Into {0}(", db.FormatName(tableName));
             foreach (var dc in columns)
             {
-                if (dc.Identity) continue;
+                // 取消对主键的过滤，避免列名和值无法一一对应的问题
+                //if (dc.Identity) continue;
 
                 sb.Append(db.FormatName(dc.ColumnName));
                 sb.Append(",");
@@ -299,27 +310,68 @@ namespace XCode.DataAccessLayer
 
             // 值列表
             sb.Append(" Values");
-            foreach (var entity in list)
-            {
-                sb.Append("(");
-                foreach (var dc in columns)
-                {
-                    if (dc.Identity) continue;
 
-                    var value = entity[dc.Name];
-                    sb.Append(db.FormatValue(dc, value));
-                    sb.Append(",");
+            // 优化支持DbTable
+            if (list.FirstOrDefault() is DbRow)
+            {
+                // 提前把列名转为索引，然后根据索引找数据
+                DbTable dt = null;
+                Int32[] ids = null;
+                foreach (DbRow dr in list)
+                {
+                    if (dr.Table != dt)
+                    {
+                        dt = dr.Table;
+                        var cs = new List<Int32>();
+                        foreach (var dc in columns)
+                        {
+                            if (dc.Identity)
+                                cs.Add(0);
+                            else
+                                cs.Add(dt.GetColumn(dc.ColumnName));
+                        }
+                        ids = cs.ToArray();
+                    }
+
+                    sb.Append("(");
+                    var row = dt.Rows[dr.Index];
+                    for (var i = 0; i < columns.Length; i++)
+                    {
+                        var dc = columns[i];
+                        //if (dc.Identity) continue;
+
+                        var value = row[ids[i]];
+                        sb.Append(db.FormatValue(dc, value));
+                        sb.Append(",");
+                    }
+                    sb.Length--;
+                    sb.Append("),");
                 }
-                sb.Length--;
-                sb.Append("),");
+            }
+            else
+            {
+                foreach (var entity in list)
+                {
+                    sb.Append("(");
+                    foreach (var dc in columns)
+                    {
+                        //if (dc.Identity) continue;
+
+                        var value = entity[dc.Name];
+                        sb.Append(db.FormatValue(dc, value));
+                        sb.Append(",");
+                    }
+                    sb.Length--;
+                    sb.Append("),");
+                }
             }
             sb.Length--;
 
             // 重复键执行update
-            if (updateColumns != null || addColumns != null)
+            if ((updateColumns != null && updateColumns.Count > 0) || (addColumns != null && addColumns.Count > 0))
             {
                 sb.Append(" On Duplicate Key Update ");
-                if (updateColumns != null)
+                if (updateColumns != null && updateColumns.Count > 0)
                 {
                     foreach (var dc in columns)
                     {
@@ -330,7 +382,7 @@ namespace XCode.DataAccessLayer
                     }
                     sb.Length--;
                 }
-                if (addColumns != null)
+                if (addColumns != null && addColumns.Count > 0)
                 {
                     sb.Append(",");
                     foreach (var dc in columns)
@@ -347,20 +399,15 @@ namespace XCode.DataAccessLayer
             return sb.Put(true);
         }
 
-        public override Int32 Insert(IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list)
         {
-            var table = columns.FirstOrDefault().Table;
-            //var sql = GetBatchSql(table, columns, null, null, list);
-
-            //return Execute(sql);
-
             // 分批
-            var batchSize = 5000;
+            var batchSize = 10_000;
             var rs = 0;
             for (var i = 0; i < list.Count();)
             {
                 var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(table, columns, null, null, es);
+                var sql = GetBatchSql(tableName, columns, null, null, es);
                 rs += Execute(sql);
 
                 i += es.Count;
@@ -369,20 +416,15 @@ namespace XCode.DataAccessLayer
             return rs;
         }
 
-        public override Int32 InsertOrUpdate(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
+        public override Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list)
         {
-            var table = columns.FirstOrDefault().Table;
-            //var sql = GetBatchSql(table, columns, updateColumns, addColumns, list);
-
-            //return Execute(sql);
-
             // 分批
-            var batchSize = 5000;
+            var batchSize = 10_000;
             var rs = 0;
             for (var i = 0; i < list.Count();)
             {
                 var es = list.Skip(i).Take(batchSize).ToList();
-                var sql = GetBatchSql(table, columns, updateColumns, addColumns, es);
+                var sql = GetBatchSql(tableName, columns, updateColumns, addColumns, es);
                 rs += Execute(sql);
 
                 i += es.Count;
@@ -414,7 +456,7 @@ namespace XCode.DataAccessLayer
         }
 
         /// <summary>数据类型映射</summary>
-        private static Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
+        private static readonly Dictionary<Type, String[]> _DataTypes = new Dictionary<Type, String[]>
         {
             { typeof(Byte[]), new String[] { "BLOB", "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "binary({0})", "varbinary({0})" } },
             //{ typeof(TimeSpan), new String[] { "TIME" } },
@@ -430,7 +472,8 @@ namespace XCode.DataAccessLayer
             { typeof(Double), new String[] { "DOUBLE" } },
             { typeof(Decimal), new String[] { "DECIMAL({0}, {1})" } },
             { typeof(DateTime), new String[] { "DATETIME", "DATE", "TIMESTAMP", "TIME" } },
-            { typeof(String), new String[] { "NVARCHAR({0})", "TEXT", "CHAR({0})", "NCHAR({0})", "VARCHAR({0})", "SET", "ENUM", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT" } },
+            // mysql中nvarchar会变成utf8字符集的varchar，而不会取数据库的utf8mb4
+            { typeof(String), new String[] { "VARCHAR({0})", "LONGTEXT", "TEXT", "CHAR({0})", "NCHAR({0})", "NVARCHAR({0})", "SET", "ENUM", "TINYTEXT", "TEXT", "MEDIUMTEXT" } },
             { typeof(Boolean), new String[] { "TINYINT" } },
         };
         #endregion
@@ -440,6 +483,9 @@ namespace XCode.DataAccessLayer
         {
             var ss = Database.CreateSession();
             var db = Database.DatabaseName;
+
+            var old = ss.ShowSQL;
+            ss.ShowSQL = false;
 
             var sql = $"SHOW TABLE STATUS FROM `{db}`";
             var dt = ss.Query(sql, null);
@@ -484,6 +530,8 @@ namespace XCode.DataAccessLayer
                     // MySql中没有布尔型，这里处理YN枚举作为布尔型
                     if (field.RawType == "enum('N','Y')" || field.RawType == "enum('Y','N')") field.DataType = typeof(Boolean);
 
+                    field.Fix();
+                    
                     table.Columns.Add(field);
                 }
                 #endregion
@@ -513,6 +561,8 @@ namespace XCode.DataAccessLayer
 
                 list.Add(table);
             }
+
+            ss.ShowSQL = old;
 
             // 找到使用枚举作为布尔型的旧表
             var es = (Database as MySql).EnumTables;

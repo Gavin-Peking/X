@@ -5,8 +5,10 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
 using System.Web.Script.Serialization;
 using System.Xml.Serialization;
+using NewLife.Log;
 
 namespace NewLife.Reflection
 {
@@ -164,9 +166,14 @@ namespace NewLife.Reflection
 
         /// <summary>在所有程序集中查找指定基类或接口的子类实现</summary>
         /// <param name="baseType">基类或接口</param>
-        /// <param name="isLoadAssembly">是否加载为加载程序集</param>
         /// <returns></returns>
-        IEnumerable<Type> GetAllSubclasses(Type baseType, Boolean isLoadAssembly);
+        IEnumerable<Type> GetAllSubclasses(Type baseType);
+
+        ///// <summary>在所有程序集中查找指定基类或接口的子类实现</summary>
+        ///// <param name="baseType">基类或接口</param>
+        ///// <param name="isLoadAssembly">是否加载为加载程序集</param>
+        ///// <returns></returns>
+        //IEnumerable<Type> GetAllSubclasses(Type baseType, Boolean isLoadAssembly);
         #endregion
     }
 
@@ -182,8 +189,8 @@ namespace NewLife.Reflection
         /// <returns></returns>
         public virtual Type GetType(String typeName, Boolean isLoadAssembly) => AssemblyX.GetType(typeName, isLoadAssembly);
 
-        static readonly BindingFlags bf = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
-        static readonly BindingFlags bfic = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.IgnoreCase;
+        private static readonly BindingFlags bf = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+        private static readonly BindingFlags bfic = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.IgnoreCase;
 
         /// <summary>获取方法</summary>
         /// <remarks>用于具有多个签名的同名方法的场合，不确定是否存在性能问题，不建议普通场合使用</remarks>
@@ -308,8 +315,8 @@ namespace NewLife.Reflection
         #endregion
 
         #region 反射获取 字段/属性
-        private ConcurrentDictionary<Type, IList<FieldInfo>> _cache1 = new ConcurrentDictionary<Type, IList<FieldInfo>>();
-        private ConcurrentDictionary<Type, IList<FieldInfo>> _cache2 = new ConcurrentDictionary<Type, IList<FieldInfo>>();
+        private readonly ConcurrentDictionary<Type, IList<FieldInfo>> _cache1 = new ConcurrentDictionary<Type, IList<FieldInfo>>();
+        private readonly ConcurrentDictionary<Type, IList<FieldInfo>> _cache2 = new ConcurrentDictionary<Type, IList<FieldInfo>>();
         /// <summary>获取字段</summary>
         /// <param name="type"></param>
         /// <param name="baseFirst"></param>
@@ -322,7 +329,7 @@ namespace NewLife.Reflection
                 return _cache2.GetOrAdd(type, key => GetFields2(key, false));
         }
 
-        IList<FieldInfo> GetFields2(Type type, Boolean baseFirst)
+        private IList<FieldInfo> GetFields2(Type type, Boolean baseFirst)
         {
             var list = new List<FieldInfo>();
 
@@ -344,8 +351,8 @@ namespace NewLife.Reflection
             return list;
         }
 
-        private ConcurrentDictionary<Type, IList<PropertyInfo>> _cache3 = new ConcurrentDictionary<Type, IList<PropertyInfo>>();
-        private ConcurrentDictionary<Type, IList<PropertyInfo>> _cache4 = new ConcurrentDictionary<Type, IList<PropertyInfo>>();
+        private readonly ConcurrentDictionary<Type, IList<PropertyInfo>> _cache3 = new ConcurrentDictionary<Type, IList<PropertyInfo>>();
+        private readonly ConcurrentDictionary<Type, IList<PropertyInfo>> _cache4 = new ConcurrentDictionary<Type, IList<PropertyInfo>>();
         /// <summary>获取属性</summary>
         /// <param name="type"></param>
         /// <param name="baseFirst"></param>
@@ -358,7 +365,7 @@ namespace NewLife.Reflection
                 return _cache4.GetOrAdd(type, key => GetProperties2(key, false));
         }
 
-        IList<PropertyInfo> GetProperties2(Type type, Boolean baseFirst)
+        private IList<PropertyInfo> GetProperties2(Type type, Boolean baseFirst)
         {
             var list = new List<PropertyInfo>();
 
@@ -378,6 +385,7 @@ namespace NewLife.Reflection
                 if (pi.GetIndexParameters().Length > 0) continue;
                 if (pi.GetCustomAttribute<XmlIgnoreAttribute>() != null) continue;
                 if (pi.GetCustomAttribute<ScriptIgnoreAttribute>() != null) continue;
+                if (pi.GetCustomAttribute<IgnoreDataMemberAttribute>() != null) continue;
 
                 if (!set.Contains(pi.Name))
                 {
@@ -402,7 +410,31 @@ namespace NewLife.Reflection
             try
             {
                 if (parameters == null || parameters.Length == 0)
+                {
+                    // 基元类型
+                    switch (type.GetTypeCode())
+                    {
+                        case TypeCode.Empty:
+                        case TypeCode.DBNull: return null;
+                        case TypeCode.Boolean: return false;
+                        case TypeCode.Char: return '\0';
+                        case TypeCode.SByte: return (SByte)0;
+                        case TypeCode.Byte: return (Byte)0;
+                        case TypeCode.Int16: return (Int16)0;
+                        case TypeCode.UInt16: return (UInt16)0;
+                        case TypeCode.Int32: return 0;
+                        case TypeCode.UInt32: return 0U;
+                        case TypeCode.Int64: return 0L;
+                        case TypeCode.UInt64: return 0UL;
+                        case TypeCode.Single: return 0F;
+                        case TypeCode.Double: return 0D;
+                        case TypeCode.Decimal: return 0M;
+                        case TypeCode.DateTime: return DateTime.MinValue;
+                        case TypeCode.String: return String.Empty;
+                    }
+
                     return Activator.CreateInstance(type, true);
+                }
                 else
                     return Activator.CreateInstance(type, parameters);
             }
@@ -661,13 +693,24 @@ namespace NewLife.Reflection
         public Boolean As(Type type, Type baseType)
         {
             if (type == null) return false;
+            if (type == baseType) return true;
 
-            // 如果基类是泛型定义
+            // 如果基类是泛型定义，补充完整，例如IList<>
+#if NET4
             if (baseType.IsGenericTypeDefinition && type.IsGenericType && !type.IsGenericTypeDefinition) type = type.GetGenericTypeDefinition();
+#else
+            if (baseType.IsGenericTypeDefinition
+                && type.IsGenericType && !type.IsGenericTypeDefinition
+                && baseType is TypeInfo inf && inf.GenericTypeParameters.Length == type.GenericTypeArguments.Length)
+                baseType = baseType.MakeGenericType(type.GenericTypeArguments);
+#endif
 
             if (type == baseType) return true;
 
             if (baseType.IsAssignableFrom(type)) return true;
+
+            //// 绝大部分子类判断可通过IsAssignableFrom完成，除非其中一方ReflectionOnly
+            //if (type.Assembly.ReflectionOnly == baseType.Assembly.ReflectionOnly) return false;
 
             // 缓存
             //var key = $"{type.FullName}_{baseType.FullName}";
@@ -680,28 +723,28 @@ namespace NewLife.Reflection
             //if (dic.TryGetValue(baseType, out var rs)) return rs;
             var rs = false;
 
-            // 接口
-            if (baseType.IsInterface)
-            {
-                if (type.GetInterface(baseType.FullName) != null)
-                    rs = true;
-                else if (type.GetInterfaces().Any(e => e.IsGenericType && baseType.IsGenericTypeDefinition ? e.GetGenericTypeDefinition() == baseType : e == baseType))
-                    rs = true;
-            }
+            //// 接口
+            //if (baseType.IsInterface)
+            //{
+            //    if (type.GetInterface(baseType.FullName) != null)
+            //        rs = true;
+            //    else if (type.GetInterfaces().Any(e => e.IsGenericType && baseType.IsGenericTypeDefinition ? e.GetGenericTypeDefinition() == baseType : e == baseType))
+            //        rs = true;
+            //}
 
-            // 判断是否子类时，支持只反射加载的程序集
-            if (!rs && type.Assembly.ReflectionOnly)
-            {
-                // 反射加载时，需要特殊处理接口
-                //if (baseType.IsInterface && type.GetInterface(baseType.Name) != null) return true;
-                while (!rs && type != typeof(Object))
-                {
-                    if (type.FullName == baseType.FullName &&
-                        type.AssemblyQualifiedName == baseType.AssemblyQualifiedName)
-                        rs = true;
-                    type = type.BaseType;
-                }
-            }
+            //// 判断是否子类时，支持只反射加载的程序集
+            //if (!rs && type.Assembly.ReflectionOnly)
+            //{
+            //    // 反射加载时，需要特殊处理接口
+            //    //if (baseType.IsInterface && type.GetInterface(baseType.Name) != null) return true;
+            //    while (!rs && type != typeof(Object))
+            //    {
+            //        if (type.FullName == baseType.FullName &&
+            //            type.AssemblyQualifiedName == baseType.AssemblyQualifiedName)
+            //            rs = true;
+            //        type = type.BaseType;
+            //    }
+            //}
 
             //dic.TryAdd(baseType, rs);
 
@@ -714,51 +757,64 @@ namespace NewLife.Reflection
         /// <returns></returns>
         public virtual IEnumerable<Type> GetSubclasses(Assembly asm, Type baseType)
         {
-            //if (asm == null) throw new ArgumentNullException(nameof(asm));
-            //if (baseType == null) throw new ArgumentNullException(nameof(baseType));
+            if (asm == null) throw new ArgumentNullException(nameof(asm));
+            if (baseType == null) throw new ArgumentNullException(nameof(baseType));
 
-            //foreach (var item in asm.GetTypes())
-            //{
-            //    if (baseType != item && baseType.IsAssignableFrom(item))
-            //        yield return item;
-            //}
-            return AssemblyX.Create(asm).FindPlugins(baseType);
+            Type[] ts;
+            try
+            {
+                ts = asm.GetTypes();
+            }
+            catch (Exception ex)
+            {
+                if (XTrace.Log.Level <= LogLevel.Debug)
+                {
+                    XTrace.WriteLine("asm.GetTypes 出错：{0}", asm.Location);
+                    XTrace.WriteException(ex);
+                }
+                yield break;
+            }
+
+            foreach (var item in ts)
+            {
+                if (item.IsInterface || item.IsAbstract || item.IsGenericType) continue;
+                if (baseType != item && baseType.IsAssignableFrom(item))
+                    yield return item;
+            }
+            //return AssemblyX.Create(asm).FindPlugins(baseType);
         }
 
         /// <summary>在所有程序集中查找指定基类或接口的子类实现</summary>
         /// <param name="baseType">基类或接口</param>
-        /// <param name="isLoadAssembly">是否加载为加载程序集</param>
         /// <returns></returns>
-        public virtual IEnumerable<Type> GetAllSubclasses(Type baseType, Boolean isLoadAssembly)
+        public virtual IEnumerable<Type> GetAllSubclasses(Type baseType)
         {
-            //// 不支持isLoadAssembly
-            //foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            //{
-            //    foreach (var type in GetSubclasses(asm, baseType))
-            //    {
-            //        yield return type;
-            //    }
-            //}
-            return AssemblyX.FindAllPlugins(baseType, isLoadAssembly);
+            // 不支持isLoadAssembly
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                foreach (var type in GetSubclasses(asm, baseType))
+                {
+                    yield return type;
+                }
+            }
         }
-        #endregion
 
-        #region 辅助方法
-        /// <summary>获取类型，如果target是Type类型，则表示要反射的是静态成员</summary>
-        /// <param name="target">目标对象</param>
-        /// <returns></returns>
-        protected virtual Type GetType(ref Object target)
-        {
-            if (target == null) throw new ArgumentNullException("target");
-
-            var type = target as Type;
-            if (type == null)
-                type = target.GetType();
-            else
-                target = null;
-
-            return type;
-        }
+        ///// <summary>在所有程序集中查找指定基类或接口的子类实现</summary>
+        ///// <param name="baseType">基类或接口</param>
+        ///// <param name="isLoadAssembly">是否加载为加载程序集</param>
+        ///// <returns></returns>
+        //public virtual IEnumerable<Type> GetAllSubclasses(Type baseType, Boolean isLoadAssembly)
+        //{
+        //    //// 不支持isLoadAssembly
+        //    //foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        //    //{
+        //    //    foreach (var type in GetSubclasses(asm, baseType))
+        //    //    {
+        //    //        yield return type;
+        //    //    }
+        //    //}
+        //    return AssemblyX.FindAllPlugins(baseType, isLoadAssembly);
+        //}
         #endregion
     }
 }

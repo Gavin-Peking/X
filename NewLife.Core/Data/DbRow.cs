@@ -1,12 +1,15 @@
 ﻿using System;
+using System.Xml.Serialization;
+using NewLife.Reflection;
 
 namespace NewLife.Data
 {
     /// <summary>数据行</summary>
-    public class DbRow
+    public struct DbRow : IIndexAccessor
     {
         #region 属性
         /// <summary>数据表</summary>
+        [XmlIgnore]
         public DbTable Table { get; set; }
 
         /// <summary>行索引</summary>

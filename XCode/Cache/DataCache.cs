@@ -12,14 +12,14 @@ namespace XCode.Cache
     public class DataCache
     {
         #region 静态
-        private static String _File = @"Config\DataCache.config";
+        private static readonly String _File = @"Config\DataCache.config";
         private static DataCache _Current;
         /// <summary>当前实例</summary>
         public static DataCache Current
         {
             get
             {
-                if (_Current == null) _Current = Load(_File.GetFullPath(), true);
+                if (_Current == null) _Current = Load(_File.GetBasePath(), true);
 
                 return _Current;
             }
@@ -79,7 +79,7 @@ namespace XCode.Cache
         {
             if (_timer == null)
             {
-                _timer = new TimerX(s => Save(_File.GetFullPath(), s as DataCache), this, 100, 10 * 60 * 1000) { Async = true };
+                _timer = new TimerX(s => Save(_File.GetBasePath(), s as DataCache), this, 100, 10 * 60 * 1000) { Async = true };
                 //_timer = TimerX.Delay(s =>
                 //{
                 //    Save(_File.GetFullPath(), this);

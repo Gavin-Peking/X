@@ -3,140 +3,163 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Xml.Serialization;
 using NewLife.Reflection;
 using NewLife.Serialization;
 
 namespace NewLife.Data
 {
     /// <summary>数据表</summary>
-    public class DbTable : IEnumerable<DbRow>
+    public class DbTable : IEnumerable<DbRow>, ICloneable
     {
         #region 属性
         /// <summary>数据列</summary>
         public String[] Columns { get; set; }
 
         /// <summary>数据列类型</summary>
+        [XmlIgnore]
         public Type[] Types { get; set; }
-
-        ///// <summary>数据列原始类型</summary>
-        //public String[] TypeNames { get; set; }
 
         /// <summary>数据行</summary>
         public IList<Object[]> Rows { get; set; }
+
+        /// <summary>总行数</summary>
+        public Int32 Total { get; set; }
         #endregion
 
         #region 构造
         #endregion
 
-        #region 方法
+        #region 从数据库读取
         /// <summary>读取数据</summary>
         /// <param name="dr"></param>
         public void Read(IDataReader dr)
         {
+            ReadHeader(dr);
+            ReadData(dr);
+        }
+
+        /// <summary>读取头部</summary>
+        /// <param name="dr"></param>
+        public void ReadHeader(IDataReader dr)
+        {
             var count = dr.FieldCount;
 
             // 字段
-            var cs = Columns ?? new String[count];
-            var ts = Types ?? new Type[count];
+            var cs = new String[count];
+            var ts = new Type[count];
             for (var i = 0; i < count; i++)
             {
-                if (cs[i] == null) cs[i] = dr.GetName(i);
-                if (ts[i] == null) ts[i] = dr.GetFieldType(i);
+                cs[i] = dr.GetName(i);
+                ts[i] = dr.GetFieldType(i);
             }
             Columns = cs;
             Types = ts;
+        }
+
+        /// <summary>读取数据</summary>
+        /// <param name="dr">数据读取器</param>
+        /// <param name="fields">要读取的字段序列</param>
+        public void ReadData(IDataReader dr, Int32[] fields = null)
+        {
+            // 字段
+            var cs = Columns;
+            var ts = Types;
+
+            if (fields == null) fields = Enumerable.Range(0, cs.Length).ToArray();
 
             // 数据
             var rs = new List<Object[]>();
             while (dr.Read())
             {
-                var row = new Object[count];
-                for (var i = 0; i < count; i++)
+                var row = new Object[fields.Length];
+                for (var i = 0; i < fields.Length; i++)
                 {
-                    var val = dr[i];
-                    if (val == DBNull.Value) val = GetDefault(Types[i].GetTypeCode());
+                    var val = dr[fields[i]];
+
+                    if (val == DBNull.Value) val = GetDefault(ts[i].GetTypeCode());
                     row[i] = val;
                 }
                 rs.Add(row);
             }
             Rows = rs;
-        }
 
+            Total = rs.Count;
+        }
+        #endregion
+
+        #region 二进制读取
         private const Byte _Ver = 1;
 
         /// <summary>从数据流读取</summary>
-        /// <param name="ms"></param>
-        public void Read(Stream ms)
+        /// <param name="stream"></param>
+        public void Read(Stream stream)
         {
             var bn = new Binary
             {
                 EncodeInt = true,
-                Stream = ms,
+                Stream = stream,
             };
 
-            // 头部，版本和压缩标记
+            // 读取头部
+            ReadHeader(bn);
+
+            // 读取全部数据
+            ReadData(bn, Total);
+        }
+
+        /// <summary>读取头部</summary>
+        /// <param name="bn"></param>
+        public void ReadHeader(Binary bn)
+        {
+            // 头部，幻数、版本和标记
+            var magic = bn.ReadBytes(14).ToStr();
+            if (magic.Trim() != "NewLifeDbTable") throw new InvalidDataException();
+
             var ver = bn.Read<Byte>();
             var flag = bn.Read<Byte>();
 
+            // 版本兼容
+            if (ver > _Ver) throw new InvalidDataException($"DbTable[ver={_Ver}]无法支持较新的版本[{ver}]");
+
             // 写入头部
             var count = bn.Read<Int32>();
-            Columns = new String[count];
-            Types = new Type[count];
+            var cs = new String[count];
+            var ts = new Type[count];
             for (var i = 0; i < count; i++)
             {
-                Columns[i] = bn.Read<String>();
+                cs[i] = bn.Read<String>();
                 var tc = (TypeCode)bn.Read<Byte>();
-                Types[i] = tc.ToString().GetTypeEx(false);
+                ts[i] = Type.GetType("System." + tc);
             }
+            Columns = cs;
+            Types = ts;
 
-            // 写入数据
-            var count2 = bn.Read<Int32>();
-            Rows = new List<Object[]>(count2);
-            for (var k = 0; k < count2; k++)
-            {
-                var row = new Object[count];
-                for (var i = 0; i < count; i++)
-                {
-                    row[i] = bn.Read(Types[i]);
-                }
-                Rows.Add(row);
-            }
+            Total = bn.ReadBytes(4).ToInt();
         }
 
-        /// <summary>写入数据流</summary>
-        /// <param name="ms"></param>
-        public void Write(Stream ms)
+        /// <summary>读取数据</summary>
+        /// <param name="bn"></param>
+        /// <param name="rows"></param>
+        /// <returns></returns>
+        public void ReadData(Binary bn, Int32 rows)
         {
-            var count = Columns.Length;
+            if (rows <= 0) return;
 
-            var bn = new Binary
+            var ts = Types;
+            var rs = new List<Object[]>(rows);
+            for (var k = 0; k < rows; k++)
             {
-                EncodeInt = true,
-                Stream = ms,
-            };
-
-            // 头部，版本和压缩标记
-            bn.Write(_Ver);
-            bn.Write((Byte)0);
-
-            // 写入头部
-            bn.Write(count);
-            for (var i = 0; i < count; i++)
-            {
-                bn.Write(Columns[i]);
-                bn.Write((Byte)Types[i].GetTypeCode());
-            }
-
-            // 写入数据
-            count = Rows.Count;
-            bn.Write(count);
-            foreach (var row in Rows)
-            {
-                for (var i = 0; i < row.Length; i++)
+                var row = new Object[ts.Length];
+                for (var i = 0; i < ts.Length; i++)
                 {
-                    bn.Write(row[i], Types[i]);
+                    row[i] = bn.Read(ts[i]);
                 }
+                rs.Add(row);
             }
+            Rows = rs;
         }
 
         /// <summary>读取</summary>
@@ -149,6 +172,77 @@ namespace NewLife.Data
             Read(pk.GetStream());
 
             return true;
+        }
+
+        /// <summary>从文件加载</summary>
+        /// <param name="file"></param>
+        /// <param name="compressed">是否压缩</param>
+        /// <returns></returns>
+        public Int64 LoadFile(String file, Boolean compressed = false) => file.AsFile().OpenRead(compressed, s => Read(s));
+        #endregion
+
+        #region 二进制写入
+        /// <summary>写入数据流</summary>
+        /// <param name="stream"></param>
+        public void Write(Stream stream)
+        {
+            var bn = new Binary
+            {
+                EncodeInt = true,
+                Stream = stream,
+            };
+
+            // 写入数据体
+            var rs = Rows;
+            if (Total == 0 && rs != null) Total = rs.Count;
+
+            // 写入头部
+            WriteHeader(bn);
+
+            // 写入数据行
+            WriteData(bn);
+        }
+
+        /// <summary>写入头部到数据流</summary>
+        /// <param name="bn"></param>
+        public void WriteHeader(Binary bn)
+        {
+            var cs = Columns;
+            var ts = Types;
+
+            // 头部，幻数、版本和标记
+            bn.Write("NewLifeDbTable".GetBytes(), 0, 14);
+            bn.Write(_Ver);
+            bn.Write(0);
+
+            // 写入头部
+            var count = cs.Length;
+            bn.Write(count);
+            for (var i = 0; i < count; i++)
+            {
+                bn.Write(cs[i]);
+                bn.Write((Byte)ts[i].GetTypeCode());
+            }
+
+            // 数据行数
+            bn.Write(Total.GetBytes(), 0, 4);
+        }
+
+        /// <summary>写入数据部分到数据流</summary>
+        /// <param name="bn"></param>
+        public void WriteData(Binary bn)
+        {
+            var ts = Types;
+            var rs = Rows;
+
+            // 写入数据
+            foreach (var row in rs)
+            {
+                for (var i = 0; i < row.Length; i++)
+                {
+                    bn.Write(row[i], ts[i]);
+                }
+            }
         }
 
         /// <summary>转数据包</summary>
@@ -165,6 +259,98 @@ namespace NewLife.Data
             ms.Position = 8;
             return new Packet(ms);
         }
+
+        /// <summary>保存到文件</summary>
+        /// <param name="file"></param>
+        /// <param name="compressed">是否压缩</param>
+        /// <returns></returns>
+        public void SaveFile(String file, Boolean compressed = false) => file.AsFile().OpenWrite(compressed, s => Write(s));
+        #endregion
+
+        #region Json序列化
+        /// <summary>转Json字符串</summary>
+        /// <param name="indented">是否缩进。默认false</param>
+        /// <param name="nullValue">是否写空值。默认true</param>
+        /// <param name="camelCase">是否驼峰命名。默认false</param>
+        /// <returns></returns>
+        public String ToJson(Boolean indented = false, Boolean nullValue = true, Boolean camelCase = false)
+        {
+            // 先转为名值对象的数组，再进行序列化
+            var list = ToDictionary();
+            return list.ToJson(indented, nullValue, camelCase);
+        }
+
+        /// <summary>转为字典数组形式</summary>
+        /// <returns></returns>
+        public IList<IDictionary<String, Object>> ToDictionary()
+        {
+            var list = new List<IDictionary<String, Object>>();
+            foreach (var row in Rows)
+            {
+                var dic = new Dictionary<String, Object>();
+                for (var i = 0; i < Columns.Length; i++)
+                {
+                    dic[Columns[i]] = row[i];
+                }
+                list.Add(dic);
+            }
+
+            return list;
+        }
+        #endregion
+
+        #region 反射
+        /// <summary>写入模型列表</summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="models"></param>
+        public void WriteModels<T>(IEnumerable<T> models)
+        {
+            // 可用属性
+            var pis = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            pis = pis.Where(e => e.PropertyType.GetTypeCode() != TypeCode.Object).ToArray();
+
+            Rows = new List<Object[]>();
+            foreach (var item in models)
+            {
+                // 头部
+                if (Columns == null)
+                {
+                    Columns = pis.Select(e => e.Name).ToArray();
+                    Types = pis.Select(e => e.PropertyType).ToArray();
+                }
+
+                var row = new Object[Columns.Length];
+                for (var i = 0; i < row.Length; i++)
+                {
+                    // 反射取值
+                    row[i] = pis[i].GetValue(item, null);
+                }
+                Rows.Add(row);
+            }
+        }
+
+        /// <summary>数据表转模型列表。普通反射，便于DAL查询后转任意模型列表</summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        public IEnumerable<T> ReadModels<T>() where T : class, new()
+        {
+            // 可用属性
+            var pis = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            var dic = pis.ToDictionary(e => e.Name, e => e);
+
+            foreach (var row in Rows)
+            {
+                var model = new T();
+                for (var i = 0; i < row.Length; i++)
+                {
+                    // 反射赋值
+                    if (dic.TryGetValue(Columns[i], out var pi))
+                        pi.SetValue(model, row[i], null);
+                }
+
+                yield return model;
+            }
+        }
         #endregion
 
         #region 获取
@@ -175,7 +361,7 @@ namespace NewLife.Data
         /// <returns></returns>
         public T Get<T>(Int32 row, String name)
         {
-            if (!TryGet<T>(row, name, out var value)) return default(T);
+            if (!TryGet<T>(row, name, out var value)) return default;
 
             return value;
         }
@@ -188,14 +374,15 @@ namespace NewLife.Data
         /// <returns></returns>
         public Boolean TryGet<T>(Int32 row, String name, out T value)
         {
-            value = default(T);
+            value = default;
+            var rs = Rows;
 
-            if (row < 0 || row >= Rows.Count || name.IsNullOrEmpty()) return false;
+            if (row < 0 || row >= rs.Count || name.IsNullOrEmpty()) return false;
 
             var col = GetColumn(name);
             if (col < 0) return false;
 
-            value = Rows[row][col].ChangeType<T>();
+            value = rs[row][col].ChangeType<T>();
 
             return true;
         }
@@ -205,9 +392,12 @@ namespace NewLife.Data
         /// <returns></returns>
         public Int32 GetColumn(String name)
         {
-            for (var i = 0; i < Columns.Length; i++)
+            var cs = Columns;
+            if (cs == null) return -1;
+
+            for (var i = 0; i < cs.Length; i++)
             {
-                if (Columns[i].EqualIgnoreCase(name)) return i;
+                if (cs[i].EqualIgnoreCase(name)) return i;
             }
 
             return -1;
@@ -217,7 +407,7 @@ namespace NewLife.Data
         #region 辅助
         /// <summary>数据集</summary>
         /// <returns></returns>
-        public override String ToString() => "DbSet[{0}][{1}]".F(Columns == null ? 0 : Columns.Length, Rows == null ? 0 : Rows.Count);
+        public override String ToString() => "DbTable[{0}][{1}]".F(Columns == null ? 0 : Columns.Length, Rows == null ? 0 : Rows.Count);
 
         private static IDictionary<TypeCode, Object> _Defs;
         private static Object GetDefault(TypeCode tc)
@@ -228,58 +418,24 @@ namespace NewLife.Data
                 foreach (TypeCode item in Enum.GetValues(typeof(TypeCode)))
                 {
                     Object val = null;
-                    switch (item)
+                    val = item switch
                     {
-                        case TypeCode.Boolean:
-                            val = false;
-                            break;
-                        case TypeCode.Char:
-                            val = (Char)0;
-                            break;
-                        case TypeCode.SByte:
-                            val = (SByte)0;
-                            break;
-                        case TypeCode.Byte:
-                            val = (Byte)0;
-                            break;
-                        case TypeCode.Int16:
-                            val = (Int16)0;
-                            break;
-                        case TypeCode.UInt16:
-                            val = (UInt16)0;
-                            break;
-                        case TypeCode.Int32:
-                            val = (Int32)0;
-                            break;
-                        case TypeCode.UInt32:
-                            val = (UInt32)0;
-                            break;
-                        case TypeCode.Int64:
-                            val = (Int64)0;
-                            break;
-                        case TypeCode.UInt64:
-                            val = (UInt64)0;
-                            break;
-                        case TypeCode.Single:
-                            val = (Single)0;
-                            break;
-                        case TypeCode.Double:
-                            val = (Double)0;
-                            break;
-                        case TypeCode.Decimal:
-                            val = (Decimal)0;
-                            break;
-                        case TypeCode.DateTime:
-                            val = DateTime.MinValue;
-                            break;
-                        case TypeCode.Empty:
-                        case TypeCode.Object:
-                        case TypeCode.DBNull:
-                        case TypeCode.String:
-                        default:
-                            val = null;
-                            break;
-                    }
+                        TypeCode.Boolean => false,
+                        TypeCode.Char => (Char)0,
+                        TypeCode.SByte => (SByte)0,
+                        TypeCode.Byte => (Byte)0,
+                        TypeCode.Int16 => (Int16)0,
+                        TypeCode.UInt16 => (UInt16)0,
+                        TypeCode.Int32 => 0,
+                        TypeCode.UInt32 => (UInt32)0,
+                        TypeCode.Int64 => (Int64)0,
+                        TypeCode.UInt64 => (UInt64)0,
+                        TypeCode.Single => (Single)0,
+                        TypeCode.Double => (Double)0,
+                        TypeCode.Decimal => (Decimal)0,
+                        TypeCode.DateTime => DateTime.MinValue,
+                        _ => null,
+                    };
                     dic[item] = val;
                 }
                 _Defs = dic;
@@ -287,47 +443,63 @@ namespace NewLife.Data
 
             return _Defs[tc];
         }
+
+        Object ICloneable.Clone() => Clone();
+
+        /// <summary>克隆</summary>
+        /// <returns></returns>
+        public DbTable Clone()
+        {
+            var dt = new DbTable
+            {
+                Columns = Columns,
+                Types = Types,
+                Rows = Rows,
+                Total = Total
+            };
+
+            return dt;
+        }
         #endregion
 
         #region 枚举
         /// <summary>获取枚举</summary>
         /// <returns></returns>
-        public IEnumerator<DbRow> GetEnumerator() => new DbEnumerator(this);
+        public IEnumerator<DbRow> GetEnumerator() => new DbEnumerator { Table = this };
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-        class DbEnumerator : IEnumerator<DbRow>
+        private struct DbEnumerator : IEnumerator<DbRow>
         {
-            public DbTable Table { get; }
+            public DbTable Table { get; set; }
 
-            public DbEnumerator(DbTable table) => Table = table;
+            private Int32 _row;
+            private DbRow _Current;
+            public DbRow Current => _Current;
 
-            private Int32 _row = -1;
-            public DbRow Current { get; set; }
-
-            Object IEnumerator.Current => Current;
+            Object IEnumerator.Current => _Current;
 
             public Boolean MoveNext()
             {
                 var rs = Table?.Rows;
                 if (rs == null || rs.Count == 0) return false;
 
+                if (_row < 0 || _row >= rs.Count)
+                {
+                    _Current = default;
+                    return false;
+                }
+
+                _Current = new DbRow(Table, _row);
+
                 _row++;
-
-                if (_row < 0 || _row >= rs.Count) return false;
-
-                var dr = Current;
-                if (dr == null)
-                    Current = new DbRow(Table, _row);
-                else
-                    dr.Index = _row;
 
                 return true;
             }
 
             public void Reset()
             {
-                Current = null;
+                _Current = default;
                 _row = -1;
             }
 

@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if !__CORE__
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -12,9 +13,6 @@ using NewLife.Model;
 using NewLife.Threading;
 using NewLife.Web;
 using XCode.Membership;
-#if !NET4
-using TaskEx = System.Threading.Tasks.Task;
-#endif
 
 namespace XCode.Web
 {
@@ -32,6 +30,9 @@ namespace XCode.Web
             //context.PreRequestHandlerExecute += OnSession;
             context.PostRequestHandlerExecute += OnPost;
             context.Error += OnPost;
+
+            context.BeginRequest += OnInit;
+            context.PostReleaseRequestState += OnEnd;
         }
 
         private void OnSession(Object sender, EventArgs e)
@@ -51,6 +52,10 @@ namespace XCode.Web
         /// <summary>访问统计</summary>
         public static Boolean WebStatistics { get; set; }
 
+        void OnInit(Object sender, EventArgs e) => ManageProvider.UserHost = GetIP();
+
+        void OnEnd(Object sender, EventArgs e) => ManageProvider.UserHost = null;
+
         void OnPost(Object sender, EventArgs e)
         {
             if (!WebOnline && !WebBehavior && !WebStatistics) return;
@@ -64,13 +69,14 @@ namespace XCode.Web
             var user = ctx.User?.Identity as IManageUser ?? ManageProvider.User as IManageUser;
 
             var sid = ctx.Session?.SessionID;
-            var ip = WebHelper.UserHost;
+            var ip = GetIP();
 
             var page = GetPage(req);
 
             // 过滤后缀
-            var ext = Path.GetExtension(page);
-            if (!ext.IsNullOrEmpty() && ExcludeSuffixes.Contains(ext)) return;
+            //var ext = Path.GetExtension(page);
+            //if (!ext.IsNullOrEmpty() && ExcludeSuffixes.Contains(ext)) return;
+            if (page.EndsWithIgnoreCase(ExcludeSuffixes)) return;
 
             var title = GetTitle(ctx, req);
             var msg = GetMessage(ctx, req, title);
@@ -83,7 +89,7 @@ namespace XCode.Web
                     if (WebOnline && !sid.IsNullOrEmpty()) UserOnline.SetWebStatus(sid, page, msg, user, ip);
 
                     // 记录用户访问的Url
-                    if (WebBehavior) SaveBehavior(user, ip, page, msg);
+                    if (WebBehavior) SaveBehavior(user, ip, page, msg, GetError(ctx) == null);
 
                     // 每个页面的访问统计
                     if (WebStatistics) SaveStatistics(ctx, user, ip, page, title);
@@ -136,22 +142,22 @@ namespace XCode.Web
             if (ss.Length == 0) return p;
 
             // 如果最后一段是数字，则可能是参数，需要去掉
-            if (ss[ss.Length - 1].ToInt() > 0) p = "/" + ss.Take(ss.Length - 1).Join("/");
+            if ((ss.Length == 3 || ss.Length == 4) && ss[ss.Length - 1].ToInt() > 0) p = "/" + ss.Take(ss.Length - 1).Join("/");
 
             return p;
         }
 
         /// <summary>忽略的后缀</summary>
-        public static HashSet<String> ExcludeSuffixes { get; set; } = new HashSet<String>(StringComparer.OrdinalIgnoreCase) {
+        public static String[] ExcludeSuffixes { get; set; } = new[] {
             ".js", ".css", ".png", ".jpg", ".gif", ".ico",  // 脚本样式图片
             ".woff", ".woff2", ".svg", ".ttf", ".otf", ".eot"   // 字体
         };
 
-        void SaveBehavior(IManageUser user, String ip, String page, String msg)
+        void SaveBehavior(IManageUser user, String ip, String page, String msg, Boolean success)
         {
             if (page.IsNullOrEmpty()) return;
 
-            LogProvider.Provider?.WriteLog("访问", "记录", msg, user?.ID ?? 0, user + "", ip);
+            LogProvider.Provider?.WriteLog("访问", "记录", success, msg, user?.ID ?? 0, user + "", ip);
         }
 
         void SaveStatistics(HttpContext ctx, IManageUser user, String ip, String page, String title)
@@ -185,5 +191,25 @@ namespace XCode.Web
 
             return ex;
         }
+
+        String GetIP()
+        {
+            var ctx = HttpContext.Current;
+            if (ctx == null) return null;
+
+            var req = ctx.Request;
+            if (req == null) return null;
+
+            var ip = (String)ctx.Items["UserHostAddress"];
+            if (ip.IsNullOrEmpty()) ip = req.ServerVariables["HTTP_X_FORWARDED_FOR"];
+            if (ip.IsNullOrEmpty()) ip = req.ServerVariables["X-Real-IP"];
+            if (ip.IsNullOrEmpty()) ip = req.ServerVariables["X-Forwarded-For"];
+            if (ip.IsNullOrEmpty()) ip = req.ServerVariables["REMOTE_ADDR"];
+            if (ip.IsNullOrEmpty()) ip = req.UserHostName;
+            if (ip.IsNullOrEmpty()) ip = req.UserHostAddress;
+
+            return ip;
+        }
     }
 }
+#endif

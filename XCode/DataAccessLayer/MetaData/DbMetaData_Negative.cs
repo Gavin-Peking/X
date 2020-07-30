@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using NewLife.Reflection;
 using NewLife.Security;
 
@@ -57,6 +59,7 @@ namespace XCode.DataAccessLayer
     {
         #region 属性
         private String ConnName => Database.ConnName;
+
         #endregion
 
         #region 反向工程
@@ -120,7 +123,7 @@ namespace XCode.DataAccessLayer
         private void CheckAllTables(IDataTable[] tables, Migration mode, Boolean dbExit)
         {
             // 数据库表进入字典
-            var dic = new Dictionary<String, IDataTable>(StringComparer.OrdinalIgnoreCase);
+            var dic = new Dictionary<String, IDataTable>();
             if (dbExit)
             {
                 var dbtables = OnGetTables(tables.Select(t => t.TableName).ToArray());
@@ -128,7 +131,8 @@ namespace XCode.DataAccessLayer
                 {
                     foreach (var item in dbtables)
                     {
-                        dic.Add(item.TableName, item);
+                        //dic.Add(item.TableName, item);
+                        dic[item.TableName] = item;
                     }
                 }
             }
@@ -261,7 +265,8 @@ namespace XCode.DataAccessLayer
                 }
                 if (IsColumnChanged(item, dbf, entityDb)) PerformSchema(sb, noDelete, DDLSchema.AlterColumn, item, dbf);
 
-                if (item.Description + "" != dbf.Description + "")
+                //if (item.Description + "" != dbf.Description + "")
+                if (FormatDescription(item.Description) != FormatDescription(dbf.Description))
                 {
                     // 先删除旧注释
                     //if (dbf.Description != null) PerformSchema(sb, noDelete, DDLSchema.DropColumnDescription, dbf);
@@ -288,7 +293,8 @@ namespace XCode.DataAccessLayer
             var sb = new StringBuilder();
 
             #region 表说明
-            if (entitytable.Description + "" != dbtable.Description + "")
+            //if (entitytable.Description + "" != dbtable.Description + "")
+            if (FormatDescription(entitytable.Description) != FormatDescription(dbtable.Description))
             {
                 //// 先删除旧注释
                 //if (!String.IsNullOrEmpty(dbtable.Description)) PerformSchema(sb, onlySql, DDLSchema.DropTableDescription, dbtable);
@@ -350,6 +356,18 @@ namespace XCode.DataAccessLayer
             return sb.ToString();
         }
 
+        /// <summary>格式化注释，去除所有非单词字符</summary>
+        /// <param name="str"></param>
+        /// <returns></returns>
+        private String FormatDescription(String str)
+        {
+            if (str.IsNullOrWhiteSpace()) return null;
+
+            return Regex.Replace(
+                str.Replace("\r\n", " ").Replace("\n", " ").Replace("\\", "\\\\").Replace("'", "")
+                .Replace("\"", "").Replace("。", ""), @"\W", "");
+        }
+
         /// <summary>检查字段是否有改变，除了默认值和备注以外</summary>
         /// <param name="entityColumn"></param>
         /// <param name="dbColumn"></param>
@@ -365,14 +383,16 @@ namespace XCode.DataAccessLayer
             // 是否已改变
             var isChanged = false;
 
-            //仅针对字符串类型比较长度
+            // 仅针对字符串类型比较长度
             if (!isChanged && entityColumn.DataType == typeof(String) && entityColumn.Length != dbColumn.Length)
             {
                 isChanged = true;
 
-                //如果是大文本类型，长度可能不等
-                if ((entityColumn.Length > Database.LongTextLength || entityColumn.Length <= 0) &&
-                    (entityDb != null && dbColumn.Length > entityDb.LongTextLength || dbColumn.Length <= 0)) isChanged = false;
+                // 如果是大文本类型，长度可能不等
+                if ((entityColumn.Length > Database.LongTextLength || entityColumn.Length <= 0)
+                    && (entityDb != null && dbColumn.Length > entityDb.LongTextLength || dbColumn.Length <= 0)
+                    || dbColumn.RawType.EqualIgnoreCase("ntext", "text", "sysname"))
+                    isChanged = false;
             }
 
             return isChanged;
@@ -383,6 +403,7 @@ namespace XCode.DataAccessLayer
             var type = entityColumn.DataType;
             if (type.IsEnum) type = typeof(Int32);
             if (type == dbColumn.DataType) return false;
+            if (Nullable.GetUnderlyingType(type) == dbColumn.DataType) return false;
 
             //// 整型不做改变
             //if (type.IsInt() && dbColumn.DataType.IsInt()) return false;
@@ -408,7 +429,7 @@ namespace XCode.DataAccessLayer
 
             // 每个分号后面故意加上空格，是为了让DbMetaData执行SQL时，不要按照分号加换行来拆分这个SQL语句
             var sb = new StringBuilder();
-            sb.AppendLine("BEGIN TRANSACTION; ");
+            //sb.AppendLine("BEGIN TRANSACTION; ");
             sb.Append(RenameTable(tableName, tempTableName));
             sb.AppendLine("; ");
             sb.Append(CreateTableSQL(entitytable));
@@ -417,6 +438,8 @@ namespace XCode.DataAccessLayer
             // 如果指定了新列和旧列，则构建两个集合
             if (entitytable.Columns != null && entitytable.Columns.Count > 0 && dbtable.Columns != null && dbtable.Columns.Count > 0)
             {
+                var db = Database;
+
                 var sbName = new StringBuilder();
                 var sbValue = new StringBuilder();
                 foreach (var item in entitytable.Columns)
@@ -450,14 +473,14 @@ namespace XCode.DataAccessLayer
                                 if (sbName.Length > 0) sbName.Append(", ");
                                 if (sbValue.Length > 0) sbValue.Append(", ");
                                 sbName.Append(fname);
-                                sbValue.Append(Database.FormatDateTime(DateTime.MinValue));
+                                sbValue.Append(db.FormatDateTime(DateTime.MinValue));
                             }
                             else if (type == typeof(Boolean))
                             {
                                 if (sbName.Length > 0) sbName.Append(", ");
                                 if (sbValue.Length > 0) sbValue.Append(", ");
                                 sbName.Append(fname);
-                                sbValue.Append(Database.FormatValue(item, false));
+                                sbValue.Append(db.FormatValue(item, false));
                             }
                         }
                     }
@@ -466,24 +489,33 @@ namespace XCode.DataAccessLayer
                         if (sbName.Length > 0) sbName.Append(", ");
                         if (sbValue.Length > 0) sbValue.Append(", ");
                         sbName.Append(fname);
+
+                        var flag = false;
+
                         // 处理一下非空默认值
-                        if (field.Nullable && !item.Nullable)
+                        if (field.Nullable && !item.Nullable || !item.Nullable && db.Type == DatabaseType.SQLite)
                         {
+                            flag = true;
                             if (type == typeof(String))
                                 sbValue.Append("ifnull({0}, \'\')".F(fname));
                             else if (type == typeof(Int16) || type == typeof(Int32) || type == typeof(Int64) ||
                                type == typeof(Single) || type == typeof(Double) || type == typeof(Decimal))
                                 sbValue.Append("ifnull({0}, 0)".F(fname));
                             else if (type == typeof(DateTime))
-                                sbValue.Append("ifnull({0}, {1})".F(fname, Database.FormatDateTime(DateTime.MinValue)));
+                                sbValue.Append("ifnull({0}, {1})".F(fname, db.FormatDateTime(DateTime.MinValue)));
+                            else if (type == typeof(Boolean))
+                                sbValue.Append("ifnull({0}, {1})".F(fname, db.FormatValue(item, false)));
+                            else
+                                flag = false;
                         }
-                        else
+
+                        if (!flag)
                         {
                             //sbValue.Append(fname);
 
                             // 处理字符串不允许空，ntext不支持+""
-                            if (type == typeof(String) && !item.Nullable && item.Length > 0 && item.Length < Database.LongTextLength)
-                                sbValue.Append(Database.StringConcat(fname, "\'\'"));
+                            if (type == typeof(String) && !item.Nullable && item.Length > 0 && item.Length < db.LongTextLength)
+                                sbValue.Append(db.StringConcat(fname, "\'\'"));
                             else
                                 sbValue.Append(fname);
                         }
@@ -497,8 +529,8 @@ namespace XCode.DataAccessLayer
             }
             sb.AppendLine("; ");
             sb.AppendFormat("Drop Table {0}", tempTableName);
-            sb.AppendLine("; ");
-            sb.Append("COMMIT;");
+            //sb.AppendLine("; ");
+            //sb.Append("COMMIT;");
 
             return sb.ToString();
         }
@@ -714,13 +746,24 @@ namespace XCode.DataAccessLayer
             if (/*schema == DDLSchema.TableExist ||*/ schema == DDLSchema.DatabaseExist) return session.QueryCount(sql) > 0;
 
             // 分隔符是分号加换行，如果不想被拆开执行（比如有事务），可以在分号和换行之间加一个空格
-            var ss = sql.Split(";" + Environment.NewLine);
-            if (ss == null || ss.Length < 1) return session.Execute(sql);
+            var sqls = sql.Split(";" + Environment.NewLine);
+            if (sqls == null || sqls.Length < 1) return session.Execute(sql);
 
-            foreach (var item in ss)
+            session.BeginTransaction(IsolationLevel.Serializable);
+            try
             {
-                session.Execute(item);
+                foreach (var item in sqls)
+                {
+                    session.Execute(item);
+                }
+                session.Commit();
             }
+            catch
+            {
+                session.Rollback();
+                throw;
+            }
+
             return 0;
         }
 
@@ -760,7 +803,33 @@ namespace XCode.DataAccessLayer
             if (field.PrimaryKey && field.Table.PrimaryKeys.Length < 2) return " Primary Key";
 
             // 是否为空
-            return field.Nullable ? " NULL" : " NOT NULL";
+            var str = field.Nullable ? " NULL" : " NOT NULL";
+
+            // 默认值
+            if (!field.Nullable && !field.Identity)
+            {
+                str += GetDefault(field, onlyDefine);
+            }
+
+            return str;
+        }
+
+        /// <summary>默认值</summary>
+        /// <param name="field"></param>
+        /// <param name="onlyDefine"></param>
+        /// <returns></returns>
+        protected virtual String GetDefault(IDataColumn field, Boolean onlyDefine)
+        {
+            if (field.DataType.IsInt() || field.DataType.IsEnum)
+                return " DEFAULT 0";
+            else if (field.DataType == typeof(Boolean))
+                return " DEFAULT 0";
+            else if (field.DataType == typeof(Double) || field.DataType == typeof(Single) || field.DataType == typeof(Decimal))
+                return " DEFAULT 0";
+            else if (field.DataType == typeof(DateTime))
+                return " DEFAULT '0001-01-01'";
+
+            return null;
         }
         #endregion
 
@@ -774,7 +843,6 @@ namespace XCode.DataAccessLayer
         public virtual String CreateTableSQL(IDataTable table)
         {
             var fs = new List<IDataColumn>(table.Columns);
-
             var sb = new StringBuilder();
 
             sb.AppendFormat("Create Table {0}(", FormatName(table.TableName));
@@ -803,7 +871,7 @@ namespace XCode.DataAccessLayer
 
         public virtual String AlterColumnSQL(IDataColumn field, IDataColumn oldfield) => $"Alter Table {FormatName(field.Table.TableName)} Alter Column {FieldClause(field, false)}";
 
-        public virtual String DropColumnSQL(IDataColumn field) => $"Alter Table {FormatName(field.Table.TableName)} Drop Column {field.ColumnName}";
+        public virtual String DropColumnSQL(IDataColumn field) => $"Alter Table {FormatName(field.Table.TableName)} Drop Column {FormatName(field.ColumnName)}";
 
         public virtual String AddColumnDescriptionSQL(IDataColumn field) => null;
 

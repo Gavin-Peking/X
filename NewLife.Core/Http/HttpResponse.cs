@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Linq;
 using System.Net;
-using System.Text;
 using NewLife.Collections;
+using NewLife.Data;
+using NewLife.Messaging;
 
 namespace NewLife.Http
 {
@@ -53,6 +54,11 @@ namespace NewLife.Http
             // 构建头部
             var sb = Pool.StringBuilder.Get();
             sb.AppendFormat("HTTP/1.1 {0} {1}\r\n", (Int32)StatusCode, StatusCode);
+
+            //cors
+            sb.AppendFormat("Access-Control-Allow-Origin:{0}\r\n", "*");
+            sb.AppendFormat("Access-Control-Allow-Methods:{0}\r\n", "POST, GET");
+            sb.AppendFormat("Access-Control-Allow-Headers:{0}\r\n", "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 
             // 内容长度
             if (length > 0) sb.AppendFormat("Content-Length:{0}\r\n", length);

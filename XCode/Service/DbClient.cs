@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using NewLife.Data;
 using NewLife.Log;
@@ -62,12 +61,13 @@ namespace XCode.Service
         #region 登录
         /// <summary>连接后自动登录</summary>
         /// <param name="client">客户端</param>
-        protected override Object OnLogin(ISocketClient client)
+        /// <param name="force">强制登录</param>
+        protected override async Task<Object> OnLoginAsync(ISocketClient client, Boolean force)
         {
             var cookie = Rand.NextString(16);
             var pass2 = cookie.GetBytes().RC4(Password.GetBytes()).ToBase64();
 
-            var rs = InvokeWithClientAsync<LoginInfo>(client, "Db/Login", new { Db, UserName, pass = pass2, cookie }).Result;
+            var rs = await InvokeWithClientAsync<LoginInfo>(client, "Db/Login", new { Db, UserName, pass = pass2, cookie }).ConfigureAwait(false);
             if (Setting.Current.Debug) XTrace.WriteLine("登录{0}成功！{1}", Servers.FirstOrDefault(), rs.ToJson());
 
             return Info = rs;
@@ -103,7 +103,7 @@ namespace XCode.Service
         {
             var arg = Encode(sql, ps);
 
-            var rs = await InvokeAsync<Packet>("Db/Query", arg);
+            var rs = await InvokeAsync<Packet>("Db/Query", arg).ConfigureAwait(false);
             //if (rs == null || rs.Total == 0) return null;
 
             var ds = new DbTable();
@@ -120,7 +120,7 @@ namespace XCode.Service
         {
             //var arg = Encode(tableName, null);
 
-            return await InvokeAsync<Int64>("Db/QueryCount", new { tableName });
+            return await InvokeAsync<Int64>("Db/QueryCount", new { tableName }).ConfigureAwait(false);
         }
 
         /// <summary>异步执行</summary>
@@ -131,7 +131,7 @@ namespace XCode.Service
         {
             var arg = Encode(sql, ps);
 
-            return await InvokeAsync<Int64>("Db/Execute", arg);
+            return await InvokeAsync<Int64>("Db/Execute", arg).ConfigureAwait(false);
         }
         #endregion
 

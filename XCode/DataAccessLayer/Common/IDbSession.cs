@@ -19,11 +19,8 @@ namespace XCode.DataAccessLayer
         /// <summary>数据库</summary>
         IDatabase Database { get; }
 
-        /// <summary>链接字符串</summary>
-        String ConnectionString { get; set; }
-
-        ///// <summary>数据库链接</summary>
-        //DbConnection Conn { get; }
+        ///// <summary>链接字符串</summary>
+        //String ConnectionString { get; set; }
 
         /// <summary>查询次数</summary>
         Int32 QueryTimes { get; set; }
@@ -36,25 +33,17 @@ namespace XCode.DataAccessLayer
         #endregion
 
         #region 打开/关闭
-        ///// <summary>连接是否已经打开</summary>
-        //Boolean Opened { get; }
+        /// <summary>打开连接并执行操作</summary>
+        /// <typeparam name="TResult"></typeparam>
+        /// <param name="callback"></param>
+        /// <returns></returns>
+        TResult Process<TResult>(Func<DbConnection, TResult> callback);
 
-        ///// <summary>打开</summary>
-        //void Open();
-
-        ///// <summary>关闭</summary>
-        //void Close();
-
-        ///// <summary>
-        ///// 自动关闭。
-        ///// 启用事务后，不关闭连接。
-        ///// 在提交或回滚事务时，如果IsAutoClose为true，则会自动关闭
-        ///// </summary>
-        //void AutoClose();
-
-        ///// <summary>设置自动关闭。启用、禁用、继承</summary>
-        ///// <param name="enable"></param>
-        //void SetAutoClose(Boolean? enable);
+        ///// <summary>打开连接并执行操作</summary>
+        ///// <typeparam name="TResult"></typeparam>
+        ///// <param name="callback"></param>
+        ///// <returns></returns>
+        //Task<TResult> ProcessAsync<TResult>(Func<DbConnection, Task<TResult>> callback);
         #endregion
 
         #region 事务
@@ -154,32 +143,29 @@ namespace XCode.DataAccessLayer
 
         #region 批量操作
         /// <summary>批量插入</summary>
+        /// <param name="tableName">表名</param>
         /// <param name="columns">要插入的字段，默认所有字段</param>
         /// <param name="list">实体列表</param>
         /// <returns></returns>
-        Int32 Insert(IDataColumn[] columns, IEnumerable<IIndexAccessor> list);
+        Int32 Insert(String tableName, IDataColumn[] columns, IEnumerable<IIndexAccessor> list);
+
+        /// <summary>批量更新</summary>
+        /// <param name="tableName">表名</param>
+        /// <param name="columns">要更新的字段，默认所有字段</param>
+        /// <param name="updateColumns">要更新的字段，默认脏数据</param>
+        /// <param name="addColumns">要累加更新的字段，默认累加</param>
+        /// <param name="list">实体列表</param>
+        /// <returns></returns>
+        Int32 Update(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list);
 
         /// <summary>批量插入或更新</summary>
+        /// <param name="tableName">表名</param>
         /// <param name="columns">要插入的字段，默认所有字段</param>
         /// <param name="updateColumns">主键已存在时，要更新的字段</param>
         /// <param name="addColumns">主键已存在时，要累加更新的字段</param>
         /// <param name="list">实体列表</param>
         /// <returns></returns>
-        Int32 InsertOrUpdate(IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list);
-        #endregion
-
-        #region 异步操作
-#if !NET4
-        ///// <summary>异步打开</summary>
-        ///// <returns></returns>
-        //Task OpenAsync();
-
-        /// <summary>执行SQL查询，返回记录集</summary>
-        /// <param name="sql">SQL语句</param>
-        /// <param name="ps">命令参数</param>
-        /// <returns></returns>
-        Task<DbTable> QueryAsync(String sql, params IDataParameter[] ps);
-#endif
+        Int32 Upsert(String tableName, IDataColumn[] columns, ICollection<String> updateColumns, ICollection<String> addColumns, IEnumerable<IIndexAccessor> list);
         #endregion
 
         #region 高级

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using NewLife.Data;
 using NewLife.Reflection;
 
 namespace NewLife.Serialization
@@ -158,8 +159,8 @@ namespace NewLife.Serialization
             return target;
         }
 
-        private Dictionary<Object, Int32> _circobj = new Dictionary<Object, Int32>();
-        private Dictionary<Int32, Object> _cirrev = new Dictionary<Int32, Object>();
+        private readonly Dictionary<Object, Int32> _circobj = new Dictionary<Object, Int32>();
+        private readonly Dictionary<Int32, Object> _cirrev = new Dictionary<Int32, Object>();
         /// <summary>字典转复杂对象，反射属性赋值</summary>
         /// <param name="dic"></param>
         /// <param name="type"></param>
@@ -182,6 +183,9 @@ namespace NewLife.Serialization
                 _cirrev.Add(circount, target);
             }
 
+            // 扩展属性
+            var ext = target as IExtend;
+
             // 遍历所有可用于序列化的属性
             var props = type.GetProperties(true).ToDictionary(e => SerialHelper.GetName(e), e => e);
             foreach (var item in dic)
@@ -193,7 +197,13 @@ namespace NewLife.Serialization
                 {
                     // 可能有小写
                     pi = props.Values.FirstOrDefault(e => e.Name.EqualIgnoreCase(item.Key));
-                    if (pi == null) continue;
+                    if (pi == null)
+                    {
+                        // 可能有扩展属性
+                        if (ext != null) ext[item.Key] = item.Value;
+
+                        continue;
+                    }
                 }
                 if (!pi.CanWrite) continue;
 
@@ -237,6 +247,8 @@ namespace NewLife.Serialization
 
                 return Convert.FromBase64String(value + "");
             }
+
+            if (type == typeof(TimeSpan)) return TimeSpan.Parse(value + "");
 
             if (type.GetTypeCode() == TypeCode.Object) return null;
 
@@ -318,7 +330,7 @@ namespace NewLife.Serialization
             //用于解决奇葩json中时间字段使用了utc时间戳，还是用双引号包裹起来的情况。
             if (value is String)
             {
-                if (long.TryParse(value + "", out var result) && result > 0)
+                if (Int64.TryParse(value + "", out var result) && result > 0)
                 {
                     var sdt = result.ToDateTime();
                     if (UseUTCDateTime) sdt = sdt.ToUniversalTime();
@@ -327,27 +339,31 @@ namespace NewLife.Serialization
             }
 
             var str = (String)value;
+            if (str.IsNullOrEmpty()) return DateTime.MinValue;
 
             var utc = false;
 
-            Int32 year;
-            Int32 month;
-            Int32 day;
-            Int32 hour;
-            Int32 min;
-            Int32 sec;
+            var year = 0;
+            var month = 0;
+            var day = 0;
+            var hour = 0;
+            var min = 0;
+            var sec = 0;
             var ms = 0;
 
             year = CreateInteger(str, 0, 4);
             month = CreateInteger(str, 5, 2);
             day = CreateInteger(str, 8, 2);
-            hour = CreateInteger(str, 11, 2);
-            min = CreateInteger(str, 14, 2);
-            sec = CreateInteger(str, 17, 2);
-            if (str.Length > 21 && str[19] == '.')
-                ms = CreateInteger(str, 20, 3);
+            if (str.Length >= 19)
+            {
+                hour = CreateInteger(str, 11, 2);
+                min = CreateInteger(str, 14, 2);
+                sec = CreateInteger(str, 17, 2);
+                if (str.Length > 21 && str[19] == '.')
+                    ms = CreateInteger(str, 20, 3);
 
-            if (str[str.Length - 1] == 'Z') utc = true;
+                if (str[str.Length - 1] == 'Z' || str.EndsWithIgnoreCase("UTC")) utc = true;
+            }
 
             if (!UseUTCDateTime && !utc)
                 return new DateTime(year, month, day, hour, min, sec, ms);

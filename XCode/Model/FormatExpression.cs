@@ -1,11 +1,10 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using NewLife.Reflection;
 using XCode.Configuration;
 using XCode.DataAccessLayer;
-using System.Linq;
 
 namespace XCode
 {
@@ -22,6 +21,9 @@ namespace XCode
 
         /// <summary>操作数</summary>
         public Object Value { get; set; }
+
+        /// <summary>是否为空</summary>
+        public override Boolean IsEmpty => Field == null || Format.IsNullOrWhiteSpace();
         #endregion
 
         #region 构造
@@ -50,20 +52,18 @@ namespace XCode
             // 非参数化
             if (ps == null)
             {
-                var op = fi.Factory;
+                // 可能不需要参数，比如 Is Null
                 var val = "";
-                if (Value is SelectBuilder sb)
-                    val = sb;
-                else if (Value is IList<Object> ems)
-                    val = ems.Join(",", e => op.FormatValue(fi, e));
-                else if (Value is String)
+                if (Format.Contains("{1}"))
                 {
-                    var list = (Value + "").Split(",").ToList();
-                    list.RemoveAll(e => (e + "").Trim().IsNullOrEmpty() || e.Contains("%")); //处理类似 in("xxx,xxx,xxx"),和 like "%,xxxx,%" 这两种情况下无法正常格式化查询字符串
-                    val = list.Count > 1 ? list.Join(",", e => op.FormatValue(fi, e)) : op.FormatValue(fi, Value);
+                    var op = fi.Factory;
+                    if (Value is SelectBuilder sb)
+                        val = sb;
+                    else if (Value is IList<Object> ems)
+                        val = ems.Join(",", e => op.FormatValue(fi, e));
+                    else
+                        val = op.FormatValue(fi, Value);
                 }
-                else
-                    val = op.FormatValue(fi, Value);
 
                 builder.AppendFormat(Format, fi.FormatedName, val);
                 return;
@@ -72,48 +72,12 @@ namespace XCode
             var type = fi.Type;
             if (type.IsEnum) type = typeof(Int32);
 
-            // 特殊处理In操作
-            if (Format.Contains(" In("))
-            {
-                // String/SelectBuilder 不走参数化
-                if (Value is String)
-                {
-                    var val = fi.Factory.FormatValue(fi, Value);
-                    builder.AppendFormat(Format, fi.FormatedName, val);
-                    return;
-                }
-                if (Value is SelectBuilder)
-                {
-                    builder.AppendFormat(Format, fi.FormatedName, Value);
-                    return;
-                }
-
-                // 序列需要多参数
-                if (Value is IEnumerable ems)
-                {
-                    var k = 1;
-                    var pns = new List<String>();
-                    foreach (var item in ems)
-                    {
-                        var name = fi.Name + k;
-                        var i = 2;
-                        while (ps.ContainsKey(name)) name = fi.Name + k + i++;
-                        k++;
-
-                        ps[name] = item.ChangeType(type);
-
-                        var op = fi.Factory;
-                        pns.Add(op.Session.FormatParameterName(name));
-                    }
-                    builder.AppendFormat(Format, fi.FormatedName, pns.Join());
-
-                    return;
-                }
-            }
-
+            // 可能不需要参数，比如 Is Null
+            if (Format.Contains("{1}"))
             {
                 // 参数化处理
                 var name = fi.Name;
+
                 var i = 2;
                 while (ps.ContainsKey(name)) name = fi.Name + i++;
 
@@ -122,6 +86,10 @@ namespace XCode
 
                 var op = fi.Factory;
                 builder.AppendFormat(Format, fi.FormatedName, op.Session.FormatParameterName(name));
+            }
+            else
+            {
+                builder.AppendFormat(Format, fi.FormatedName);
             }
         }
         #endregion

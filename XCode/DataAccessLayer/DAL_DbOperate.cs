@@ -1,12 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Linq;
+using System.IO;
 using System.Text;
 using System.Threading;
-using NewLife.Caching;
 using NewLife.Collections;
 using NewLife.Data;
+using NewLife.Log;
 using NewLife.Reflection;
 
 namespace XCode.DataAccessLayer
@@ -36,7 +36,7 @@ namespace XCode.DataAccessLayer
             if (startRowIndex <= 0 && maximumRows <= 0) return builder;
 
             // 2016年7月2日 HUIYUE 取消分页SQL缓存，此部分缓存提升性能不多，但有可能会造成分页数据不准确，感觉得不偿失
-            return Db.PageSplit(builder, startRowIndex, maximumRows);
+            return Db.PageSplit(builder.Clone(), startRowIndex, maximumRows);
         }
 
         /// <summary>执行SQL查询，返回记录集</summary>
@@ -241,7 +241,7 @@ namespace XCode.DataAccessLayer
             return st;
         }
 
-        private TResult QueryByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String prefix = null)
+        private TResult QueryByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String prefix)
         {
             CheckDatabase();
 
@@ -249,11 +249,6 @@ namespace XCode.DataAccessLayer
             var cache = GetCache();
             if (cache != null)
             {
-                //var key = "";
-                //if (keyFactory != null)
-                //    key = keyFactory(k1, k2, k3);
-                //else
-                //{
                 var sb = Pool.StringBuilder.Get();
                 if (!prefix.IsNullOrEmpty())
                 {
@@ -264,18 +259,48 @@ namespace XCode.DataAccessLayer
                 Append(sb, k2);
                 Append(sb, k3);
                 var key = sb.Put(true);
-                //}
+
+                //if (cache.TryGetValue(key, out var value)) return value.ChangeType<TResult>();
 
                 return cache.GetItem(key, k =>
                 {
+                    // 达到60秒后全表查询使用文件缓存
+                    var dataFile = "";
+                    if ((Expire >= 60 || Db.Readonly) && prefix == nameof(Query))
+                    {
+                        var builder = k1 as SelectBuilder;
+                        var start = (Int64)(Object)k2;
+                        var max = (Int64)(Object)k3;
+                        if (start <= 0 && max <= 0 && builder != null && builder.Where.IsNullOrEmpty())
+                        {
+                            dataFile = NewLife.Setting.Current.DataPath.CombinePath(ConnName, builder.Table.Trim('[', ']', '`', '"') + ".dt");
+
+                            // 首次缓存加载时采用文件缓存替代，避免读取数据库耗时过长
+                            if (!cache.ContainsKey(k) && File.Exists(dataFile.GetFullPath()))
+                            {
+                                var dt = new DbTable();
+                                dt.LoadFile(dataFile);
+                                return dt;
+                            }
+                        }
+                    }
+
                     Interlocked.Increment(ref _QueryTimes);
-                    return callback(k1, k2, k3);
+                    var rs = Invoke(k1, k2, k3, callback, prefix);
+
+                    // 达到60秒后全表查询使用文件缓存
+                    if (!dataFile.IsNullOrEmpty())
+                    {
+                        (rs as DbTable).SaveFile(dataFile);
+                    }
+
+                    return rs;
                 }).ChangeType<TResult>();
             }
 
             Interlocked.Increment(ref _QueryTimes);
 
-            return callback(k1, k2, k3);
+            return Invoke(k1, k2, k3, callback, prefix);
         }
 
         private TResult ExecuteByCache<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback)
@@ -284,14 +309,51 @@ namespace XCode.DataAccessLayer
 
             CheckDatabase();
 
-            var rs = callback(k1, k2, k3);
+            var rs = Invoke(k1, k2, k3, callback, "Execute");
 
             var st = GetCache();
-            st?.Clear();
+            if (st != null)
+            {
+                st?.Clear();
+
+                // 删除文件缓存
+                var dataDir = NewLife.Setting.Current.DataPath.CombinePath(ConnName);
+                if (Directory.Exists(dataDir))
+                {
+                    try
+                    {
+                        Directory.Delete(dataDir, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        XTrace.WriteException(ex);
+                    }
+                }
+            }
 
             Interlocked.Increment(ref _ExecuteTimes);
 
             return rs;
+        }
+
+        private TResult Invoke<T1, T2, T3, TResult>(T1 k1, T2 k2, T3 k3, Func<T1, T2, T3, TResult> callback, String action)
+        {
+            var tracer = Tracer ?? GlobalTracer;
+            var span = tracer?.NewSpan($"db:{ConnName}:{action}");
+            try
+            {
+                return callback(k1, k2, k3);
+            }
+            catch (Exception ex)
+            {
+                // 使用k1参数作为tag，一般是sql
+                span?.SetError(ex, k1);
+                throw;
+            }
+            finally
+            {
+                span?.Dispose();
+            }
         }
 
         private static void Append(StringBuilder sb, Object value)
@@ -336,10 +398,5 @@ namespace XCode.DataAccessLayer
             }
         }
         #endregion
-
-        //#region 队列
-        ///// <summary>实体队列</summary>
-        //public EntityQueue Queue { get; private set; }
-        //#endregion
     }
 }

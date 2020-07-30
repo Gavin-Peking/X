@@ -184,7 +184,7 @@ namespace NewLife.Serialization
         #region 字典名值对
         private Boolean WriteDictionary(Object value, Type type)
         {
-            if (!type.As<IDictionary>()) return false;
+            if (!type.As<IDictionary>() && !(value is IDictionary)) return false;
 
             var dic = value as IDictionary;
 
@@ -236,7 +236,7 @@ namespace NewLife.Serialization
         #region 数组名值对
         private Boolean WriteArray(Object value, Type type)
         {
-            if (!type.As<IList>()) return false;
+            if (!type.As<IList>() && !(value is IList)) return false;
 
             var list = value as IList;
             if (list == null || list.Count == 0) return true;
@@ -374,15 +374,12 @@ namespace NewLife.Serialization
 
         static Type GetMemberType(MemberInfo member)
         {
-            switch (member.MemberType)
+            return member.MemberType switch
             {
-                case MemberTypes.Field:
-                    return (member as FieldInfo).FieldType;
-                case MemberTypes.Property:
-                    return (member as PropertyInfo).PropertyType;
-                default:
-                    throw new NotSupportedException();
-            }
+                MemberTypes.Field => (member as FieldInfo).FieldType,
+                MemberTypes.Property => (member as PropertyInfo).PropertyType,
+                _ => throw new NotSupportedException(),
+            };
         }
         #endregion
     }
